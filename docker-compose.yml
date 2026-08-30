@@ -1,0 +1,30 @@
+services:
+  bot:
+    build: .
+    container_name: telegram-ai-bridge
+    env_file: .env
+    environment:
+      - WORK_DIR=/app
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - WEBHOOK_SECRET=${WEBHOOK_SECRET:-}
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+      - MODEL=${MODEL:-opencode/muse-spark-1.2-contributor-free}
+    volumes:
+      - ./:/app  # untuk WORK_DIR mount saat dev; hapus di prod dan pakai COPY
+    restart: unless-stopped
+    ports:
+      - "8000:8000"  # untuk webhook/healthz
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  # Optional: Redis untuk debounce (sesuai best practice)
+  # redis:
+  #   image: redis:7-alpine
+  #   ports: ["6379:6379"]
+  #   volumes: ["redis_data:/data"]
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+# volumes:
+#   redis_data:
