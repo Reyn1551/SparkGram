@@ -1,72 +1,89 @@
-# SparkGram
+# SparkGram — Telegram AI Bridge
 
-# Telegram AI Agent Bridge — Muse Spark 1.2 Live (git clone ready)
+Telegram ↔ AI Agent bridge (Muse Spark 1.2). Streaming `editMessageText` 1s, Markdown → Telegram HTML, PnP model/mode, deploy anywhere.
 
-Live bridge Telegram ↔ AI Agent dengan streaming 1s + output HTML cantik. Siap `git clone` dan deploy dimana aja (Railway/Render/Fly/VPS/Docker).
-
-## Quick Start (git clone anywhere)
+## Quick Start
 
 ```bash
-git clone https://github.com/Reyn1551/telegram-opencode-bridge.git
-cd telegram-opencode-bridge
+git clone https://github.com/Reyn1551/SparkGram.git
+cd SparkGram
 cp .env.example .env  # isi TELEGRAM_BOT_TOKEN
 python -m pip install -r requirements.txt
-python bot_bridge_live.py  # polling dev → laptop harus nyala
+python bot_bridge_live.py
 ```
 
-Test di Telegram `@Env_OC_BOT` → kirim `halo`.
+Polling dev — laptop harus nyala. Test di Telegram kirim `halo`.
 
 ## Deploy
 
-### Docker Compose (VPS / lokal prod)
+**Docker Compose (VPS)**
+
 ```bash
 docker compose up --build -d
 docker compose logs -f bot
 ```
 
-### Railway (webhook lean)
+**Railway**
+
 ```bash
-railway up  # auto set RAILWAY_PUBLIC_DOMAIN → setWebhook
-# Atau connect GitHub → auto deploy, set TELEGRAM_BOT_TOKEN di Variables
+railway up
+# atau connect GitHub → set TELEGRAM_BOT_TOKEN di Variables
 ```
 
-### Fly.io
+**Fly.io**
+
 ```bash
 fly launch --no-deploy
 fly secrets set TELEGRAM_BOT_TOKEN=xxx WEBHOOK_SECRET=xxx
 fly deploy
 ```
 
-### Render / VPS
-`Dockerfile` sudah non-root + HEALTHCHECK `/healthz` (Railway `railway.json`, Fly `fly.toml` included).
+`Dockerfile` non-root + `HEALTHCHECK`. `railway.json` & `fly.toml` included.
 
-## Konsep (sesuai riset 2026-08-30)
+## Konfigurasi
 
-- **Polling vs Webhook:** polling untuk dev (<10k user), webhook prod (HTTPS 443 + `secret_token` + `/healthz`)
-- **Streaming:** `editMessageText` throttle 1s + spinner `⠋⠙` (DM bisa `sendMessageDraft` Bot API 9.5)
-- **HTML:** Markdown → Telegram HTML (`<b>`, `<code>`, `<pre>`, `<a>`) via `md_to_telegram_html()`
-- **Fixes:** `limit=10MB` + `iter_lines()` cegah `LimitOverrunError`, `split_markdown()` cegah `Can't find end tag code` (penyebab stuck 42s)
+Semua via `.env`:
+
+```
+TELEGRAM_BOT_TOKEN=xxx
+MODEL=opencode/muse-spark-1.2-contributor-free
+WORK_DIR=/app
+ALLOWED_USER_IDS=1925430810
+WEBHOOK_URL= # kosong=polling, isi=https://.../webhook untuk prod
+```
+
+Ganti model tanpa edit kode: `/model set groq/llama-3.3-70b-versatile`
 
 ## Struktur
 
-- `bot_bridge_live.py` — LIVE bridge (muse-spark terkunci, streaming, HTML)
-- `bot_bridge.py` — legacy polling sederhana
-- `Dockerfile` / `docker-compose.yml` / `railway.json` / `fly.toml` — deploy anywhere
-- `.env.example` — env template
-- `riset/telegram-ai-agent-best-practice-2026-08-30.md` — laporan riset multi-agent penuh
-
-## Ganti Model / WORK_DIR
-
-```python
-# bot_bridge_live.py:18,19
-MODEL = "opencode/muse-spark-1.2-contributor-free"
-WORK_DIR = r"D:\Riset\HyperSpectral"
+```
+bot_bridge_live.py              # live bridge (streaming, vision, /model, /restart)
+bot_bridge.py                   # legacy polling sederhana
+scripts/run_bridge_loop.ps1     # self-healing runner (Windows autostart)
+scripts/install_autostart.ps1   # installer Task Scheduler + Registry + Startup
+Dockerfile / docker-compose.yml / railway.json / fly.toml
+.env.example
+riset/telegram-ai-agent-best-practice-2026-08-30.md
 ```
 
-## Roadmap
+## Catatan Teknis
 
-Lihat laporan `riset/telegram-ai-agent-best-practice-2026-08-30.md` Hari 2-7 untuk migrasi PydanticAI `Agent.run_stream()`.
+- Polling: dev <10k user, Webhook: prod (HTTPS + secret_token + /healthz)
+- Streaming: throttle 1.1s + spinner, chunk aman di boundary `pre`/`code`
+- Formatter: `md_to_telegram_html()` + `split_markdown()` — cegah `LimitOverrunError` & broken tag
+- Autostart: Task Scheduler (HIGHEST) → fallback Registry Run → Startup LNK, watchdog 330s
+
+## Autostart Windows
+
+```powershell
+# install (butuh Admin sekali untuk Task Scheduler)
+.\scripts\install_autostart.ps1
+# uninstall
+.\scripts\install_autostart.ps1 -Uninstall
+# cek log
+Get-Content $env:TEMP\telegram-bridge\bridge.log -Tail 30
+```
 
 ## Lisensi
 
-MIT — siap fork.
+MIT

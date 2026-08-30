@@ -38,7 +38,7 @@ except Exception:
     pass
 
 # === KONFIG PnP — semua dari env biar git clone anywhere ===
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8808398800:AAGG9aG3iupOpurz-lqJ7LghZC0-M2f9tsQ")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ALLOWED_USER_IDS = {int(x.strip()) for x in os.getenv("ALLOWED_USER_IDS", "1925430810").split(",") if x.strip().isdigit()}
 WORK_DIR = os.getenv("WORK_DIR", str(Path(__file__).parent.resolve()))  # GANTI via .env: r"D:\Riset\HyperSpectral"
 # PnP model: set via .env MODEL atau /model di Telegram — default muse-spark gratis
@@ -763,8 +763,8 @@ async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    if "AA" not in BOT_TOKEN:
-        print("ERROR: BOT_TOKEN invalid")
+    if not BOT_TOKEN or "AA" not in BOT_TOKEN:
+        print("ERROR: TELEGRAM_BOT_TOKEN belum diisi. Isi .env atau env var: TELEGRAM_BOT_TOKEN=xxx")
         return
     import shutil
     if not shutil.which("opencode"):

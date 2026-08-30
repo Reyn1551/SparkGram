@@ -17,8 +17,7 @@ from telegram.error import BadRequest
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
 # === KONFIGURASI ===
-# GANTI dengan token baru kamu setelah revoke. Lebih aman pakai env var: set TELEGRAM_BOT_TOKEN=xxx
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8808398800:AAGG9aG3iupOpurz-lqJ7LghZC0-M2f9tsQ")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 # Hanya user ini yang boleh trigger opencode (isi dari getUpdates kamu)
 ALLOWED_USER_IDS = {1925430810}  # ReynaldiRafi
 # Folder project yang akan dikerjakan opencode. Ganti ke project kamu, contoh: r"D:\kuliah\skripsi"
@@ -322,6 +321,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        await update.message.reply_text(f"Akses ditolak. ID kamu: {update.effective_user.id}")
+        return
     await update.message.reply_text(
         "<b>Cara pakai</b>\n"
         "Kirim pesan natural language, contoh:\n"
@@ -334,12 +336,18 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        await update.message.reply_text(f"Akses ditolak. ID kamu: {update.effective_user.id}")
+        return
     await update.message.reply_text(
         f"chat_id kamu: <code>{update.effective_chat.id}</code>\nuser_id: <code>{update.effective_user.id}</code>",
         parse_mode="HTML",
     )
 
 async def pwd_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        await update.message.reply_text(f"Akses ditolak. ID kamu: {update.effective_user.id}")
+        return
     await update.message.reply_text(f"<b>WORK_DIR:</b> <code>{_escape_html(WORK_DIR)}</code>", parse_mode="HTML")
 
 async def run_opencode(prompt: str) -> str:
@@ -470,8 +478,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def main():
-    if "AA" not in BOT_TOKEN or BOT_TOKEN.startswith("GANTI"):
-        print("ERROR: BOT_TOKEN belum diisi. Set env TELEGRAM_BOT_TOKEN atau edit BOT_TOKEN di file ini.")
+    if not BOT_TOKEN or "AA" not in BOT_TOKEN:
+        print("ERROR: TELEGRAM_BOT_TOKEN belum diisi. Set env var atau .env: TELEGRAM_BOT_TOKEN=xxx")
         return
 
     # Cek opencode ada

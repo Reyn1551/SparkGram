@@ -1,7 +1,15 @@
-
 __pycache__/
 *.pyc
+*.pyo
 .env
 .venv/
+venv/
 *.log
-
+.restart
+.bridge_restart
+tmp_images/
+out_*.html
+chunk_*.html
+_opencode_output.txt
+.DS_Store
+Thumbs.db
