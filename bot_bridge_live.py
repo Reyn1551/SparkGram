@@ -20,6 +20,22 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
+# === LOAD .env manual (tanpa butuh python-dotenv) ===
+try:
+    _env_path = Path(__file__).parent / ".env"
+    if _env_path.exists():
+        for _line in _env_path.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _k, _v = _line.split("=", 1)
+            _k = _k.strip()
+            _v = _v.strip().strip('"').strip("'")
+            if _k and _k not in os.environ:
+                os.environ[_k] = _v
+except Exception:
+    pass
+
 # === KONFIG PnP — semua dari env biar git clone anywhere ===
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8808398800:AAGG9aG3iupOpurz-lqJ7LghZC0-M2f9tsQ")
 ALLOWED_USER_IDS = {int(x.strip()) for x in os.getenv("ALLOWED_USER_IDS", "1925430810").split(",") if x.strip().isdigit()}
@@ -287,6 +303,9 @@ async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        await update.message.reply_text(f"Akses ditolak. ID kamu: {update.effective_user.id}")
+        return
     await update.message.reply_text(
         f"chat_id: <code>{update.effective_chat.id}</code>\nuser_id: <code>{update.effective_user.id}</code>",
         parse_mode=ParseMode.HTML,
@@ -294,13 +313,17 @@ async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def pwd_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        await update.message.reply_text(f"Akses ditolak. ID kamu: {update.effective_user.id}")
+        return
     await update.message.reply_text(f"WORK_DIR: <code>{html.escape(WORK_DIR)}</code>", parse_mode=ParseMode.HTML)
 
 
 # ===== LIVE STREAMING CORE =====
-async def stream_opencode(prompt: str, status_msg, bot, chat_id: int):
+async def stream_opencode(prompt: str, status_msg, bot, chat_id: int, image_paths: list[str] | None = None):
     """
     Jalankan opencode run --format json dan streaming step-by-step ke Telegram via edit.
+    PnP image: jika image_paths ada, kirim via --file (vision-capable model).
     Return: (final_text, tool_logs, elapsed, tokens)
     """
     cmd = [
@@ -309,9 +332,12 @@ async def stream_opencode(prompt: str, status_msg, bot, chat_id: int):
         "--format", "json",
         "--model", RUNTIME_MODEL,
         "--auto",
-        "--thinking",  # agar dapat reasoning event untuk live indicator
+        "--thinking",
     ]
-    log.info(f"STREAM PnP: model={RUNTIME_MODEL} dir={WORK_DIR} | {' '.join(cmd)}")
+    if image_paths:
+        for p in image_paths:
+            cmd.extend(["--file", p])
+    log.info(f"STREAM PnP: model={RUNTIME_MODEL} dir={WORK_DIR} images={len(image_paths) if image_paths else 0} | {' '.join(cmd[:8])}...")
 
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -589,6 +615,103 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await asyncio.sleep(0.3)
 
 
+async def handle_image(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """PnP image handler — download foto dari Telegram, teruskan ke opencode vision via --file."""
+    if not is_allowed(update):
+        await update.message.reply_text(f"Akses ditolak. ID kamu: {update.effective_user.id}")
+        return
+    # Ambil file terbesar (photo[-1]) atau document image
+    photo = None
+    if update.message.photo:
+        photo = update.message.photo[-1]
+    elif update.message.document and update.message.document.mime_type and update.message.document.mime_type.startswith("image/"):
+        photo = update.message.document
+    else:
+        await update.message.reply_text("Kirim foto sebagai Photo (bukan file) atau Document image.")
+        return
+
+    # Validasi ukuran Bot API 20MB
+    if hasattr(photo, "file_size") and photo.file_size and photo.file_size > 20 * 1024 * 1024:
+        await update.message.reply_text("❌ Gambar >20MB, kompres dulu (Bot API limit 20MB).")
+        return
+
+    caption = (update.message.caption or "").strip()
+    if not caption:
+        caption = "jelaskan gambar ini secara detail: apa isinya, objek utama, warna, konteks, dan insight relevan"
+
+    # Download
+    tmpdir = Path(os.getenv("TEMP", os.getenv("TMP", str(Path(__file__).parent / "tmp_images")))) / "sparkgram_images"
+    tmpdir.mkdir(parents=True, exist_ok=True)
+    try:
+        file = await context.bot.get_file(photo.file_id)
+        ext = Path(file.file_path or "").suffix or ".jpg"
+        if not ext or len(ext) > 5:
+            ext = ".jpg"
+        dest = tmpdir / f"{photo.file_unique_id}{ext}"
+        await file.download_to_drive(str(dest))
+    except Exception as e:
+        log.exception("download image fail")
+        await update.message.reply_text(f"❌ Gagal download gambar: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
+        return
+
+    short_model = RUNTIME_MODEL.split("/")[-1]
+    status_msg = await update.message.reply_text(
+        f"🖼️ <b>{html.escape(short_model)}</b> • menerima gambar {html.escape(dest.name)}\n<code>{html.escape(caption[:120])}</code>\n<i>vision via --file</i>",
+        parse_mode=ParseMode.HTML,
+    )
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    # Stream opencode dengan image attach
+    final_text, tool_logs, elapsed, tokens = await stream_opencode(caption, status_msg, context.bot, update.effective_chat.id, image_paths=[str(dest)])
+
+    if final_text.startswith("❌"):
+        try:
+            await status_msg.edit_text(final_text, parse_mode=ParseMode.HTML)
+        except:
+            await update.message.reply_text(final_text, parse_mode=ParseMode.HTML)
+        return
+    if not final_text or not final_text.strip():
+        final_text = "(Vision tidak mengembalikan teks, tapi tools mungkin sudah dijalankan)"
+        if tool_logs:
+            final_text += "\n\n" + "\n".join(tool_logs)
+
+    tok_str = ""
+    if tokens:
+        tok_str = f" • {tokens.get('output',0)} tok out / {tokens.get('total',0)} total"
+    header = f"✅ <b>{html.escape(short_model)} vision selesai</b> • {elapsed}s{tok_str}\n<i>{html.escape(RUNTIME_MODEL)}</i> • 🖼️ {html.escape(dest.name)}\n"
+    if tool_logs:
+        header += "\n".join(tool_logs) + "\n"
+    header += "—" * 20
+
+    chunks = split_markdown(final_text, header, 3500)
+    try:
+        await status_msg.edit_text(chunks[0], parse_mode=ParseMode.HTML)
+    except Exception as e:
+        log.warning(f"vision final edit fail: {e}")
+        plain = re.sub(r"<[^>]+>", "", chunks[0])
+        try:
+            await status_msg.edit_text(plain[:3900])
+        except:
+            await update.message.reply_text(chunks[0][:3900], parse_mode=ParseMode.HTML if "<" in chunks[0] else None)
+    for chunk in chunks[1:]:
+        try:
+            await update.message.reply_text(chunk, parse_mode=ParseMode.HTML)
+        except Exception as e:
+            if "can't parse" in str(e).lower():
+                plain = re.sub(r"<[^>]+>", "", chunk)
+                await update.message.reply_text(plain[:3900])
+            else:
+                await update.message.reply_text(chunk[:3900])
+        await asyncio.sleep(0.3)
+    # Cleanup opsional: jangan hapus langsung biar bisa audit, tapi batasi 50 file
+    try:
+        files = sorted(tmpdir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in files[50:]:
+            old.unlink(missing_ok=True)
+    except:
+        pass
+
+
 def main():
     if "AA" not in BOT_TOKEN:
         print("ERROR: BOT_TOKEN invalid")
@@ -611,6 +734,8 @@ def main():
     app.add_handler(CommandHandler("id", id_cmd))
     app.add_handler(CommandHandler("pwd", pwd_cmd))
     app.add_handler(CommandHandler("help", start))
+    # PnP: text + vision (photo/document image) — harus register image SEBELUM text biar tidak ke-skip
+    app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     if WEBHOOK_URL:
