@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -49,6 +50,12 @@ PORT = int(os.getenv("PORT", "8000"))
 TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", "300"))
 # Runtime model override per-process (via /model set)
 RUNTIME_MODEL = MODEL
+
+# Auto-restart setelah edit bridge — PnP self-healing (watch file mtime + flag)
+_SELF_PATH = Path(__file__).resolve()
+_SELF_MTIME = _SELF_PATH.stat().st_mtime if _SELF_PATH.exists() else 0
+_RESTART_FLAG = Path(__file__).parent / ".restart"
+_RESTART_FLAG2 = Path(__file__).parent / ".bridge_restart"
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -317,6 +324,49 @@ async def pwd_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"Akses ditolak. ID kamu: {update.effective_user.id}")
         return
     await update.message.reply_text(f"WORK_DIR: <code>{html.escape(WORK_DIR)}</code>", parse_mode=ParseMode.HTML)
+
+
+async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update):
+        await update.message.reply_text(f"Akses ditolak. ID kamu: {update.effective_user.id}")
+        return
+    await update.message.reply_text("♻️ Restarting bridge... (auto-restart loop akan nyalakan lagi 5s)", parse_mode=ParseMode.HTML)
+    log.info(f"Manual restart by {update.effective_user.id}")
+    # Beri waktu kirim pesan dulu
+    await asyncio.sleep(1)
+    # Trigger loop restart via exit 0 (run_bridge_loop akan restart)
+    os._exit(0)
+
+
+async def self_watch():
+    """Watch bot_bridge_live.py mtime + .restart flag — jika berubah, exit biar loop restart (auto-restart setelah edit)."""
+    global _SELF_MTIME
+    log.info(f"Self-watch aktif: {_SELF_PATH} mtime={_SELF_MTIME} flag={_RESTART_FLAG}")
+    while True:
+        await asyncio.sleep(3)
+        try:
+            # Cek flag file (AI bisa sentuh: echo 1 > .restart)
+            if _RESTART_FLAG.exists() or _RESTART_FLAG2.exists():
+                log.info("Restart flag detected — exiting for loop restart")
+                # Hapus flag biar tidak loop
+                try:
+                    _RESTART_FLAG.unlink(missing_ok=True)
+                    _RESTART_FLAG2.unlink(missing_ok=True)
+                except:
+                    pass
+                await asyncio.sleep(1)
+                os._exit(0)
+            # Cek mtime file bridge
+            if _SELF_PATH.exists():
+                cur = _SELF_PATH.stat().st_mtime
+                if cur != _SELF_MTIME:
+                    log.info(f"Bridge file changed mtime {_SELF_MTIME} -> {cur} — auto-restart")
+                    await asyncio.sleep(1)
+                    os._exit(0)
+        except SystemExit:
+            raise
+        except Exception as e:
+            log.debug(f"self_watch error: {e}")
 
 
 # ===== LIVE STREAMING CORE =====
@@ -728,12 +778,18 @@ def main():
     except RuntimeError:
         asyncio.set_event_loop(asyncio.new_event_loop())
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    async def _post_init(application: Application):
+        # Self-watch auto-restart setelah edit bridge (PnP)
+        asyncio.create_task(self_watch())
+        log.info("Self-watch task started")
+
+    app = Application.builder().token(BOT_TOKEN).post_init(_post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("model", model_cmd))
     app.add_handler(CommandHandler("id", id_cmd))
     app.add_handler(CommandHandler("pwd", pwd_cmd))
     app.add_handler(CommandHandler("help", start))
+    app.add_handler(CommandHandler("restart", restart_cmd))
     # PnP: text + vision (photo/document image) — harus register image SEBELUM text biar tidak ke-skip
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
