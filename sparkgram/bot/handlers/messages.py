@@ -6,6 +6,7 @@ import time
 import html
 import asyncio
 import logging
+import datetime
 from pathlib import Path
 from typing import Optional, List
 
@@ -46,8 +47,16 @@ def get_short_dir(path_str: str) -> str:
         return str(path_str)
 
 
+def get_current_time_str() -> str:
+    """Returns current timestamp string for completion stamp."""
+    try:
+        return datetime.datetime.now().strftime("%H:%M:%S")
+    except Exception:
+        return ""
+
+
 def build_response_keyboard() -> InlineKeyboardMarkup:
-    """Builds standard interactive action keyboard at bottom of AI response."""
+    """Builds standard interactive action keyboard at bottom of completed AI response."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("🆕 Sesi Baru", callback_data="sw:new"),
@@ -117,6 +126,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             work_dir=work_dir,
             session_id=session_id,
             model=model,
+            files=None,
         )
     )
     session_manager.active_tasks[chat_id] = task
@@ -130,6 +140,7 @@ async def _stream_execution_worker(
     work_dir: str,
     session_id: Optional[str],
     model: str,
+    files: Optional[List[str]] = None,
 ):
     """Internal streaming worker with throttled updates and live heartbeat progress."""
     accumulated_lines: List[str] = []
@@ -195,7 +206,7 @@ async def _stream_execution_worker(
                 frame_idx = (frame_idx + 1) % len(spinner_frames)
                 icon = spinner_frames[frame_idx]
                 elapsed = now - start_time
-                header = f"{icon} <b>Streaming Output...</b> • <code>{html.escape(model_short)}</code> • <i>({elapsed:.1f}s)</i>"
+                header = f"{icon} <b>Sedang Menulis Respon...</b> • <code>{html.escape(model_short)}</code> • <i>({elapsed:.1f}s)</i>"
                 
                 # Show last 25 lines of output in live box
                 raw_text = "\n".join(accumulated_lines[-25:])
@@ -237,6 +248,7 @@ async def _stream_execution_worker(
             work_dir=work_dir,
             model=model,
             session_id=session_id,
+            files=files,
             timeout_sec=600.0,
             on_chunk=on_chunk,
             on_proc_started=on_proc_started,
@@ -248,8 +260,14 @@ async def _stream_execution_worker(
 
         final_raw = result.output or (result.error or "Tidak ada output.")
         short_dir = get_short_dir(work_dir)
-        header = f"✨ <b>SparkGram AI</b> • <code>{html.escape(model_short)}</code> • <i>({result.duration_sec:.1f}s)</i>\n━━━━━━━━━━━━━━━━━━━━"
-        footer = f"\n━━━━━━━━━━━━━━━━━━━━\n📁 <code>{html.escape(short_dir)}</code>"
+        time_stamp = get_current_time_str()
+        
+        # Crystal clear completion badge
+        header = (
+            f"✅ <b>Selesai (Completed)</b> • <code>{html.escape(model_short)}</code> • <i>({result.duration_sec:.1f}s)</i>\n"
+            f"━━━━━━━━━━━━━━━━━━━━"
+        )
+        footer = f"\n━━━━━━━━━━━━━━━━━━━━\n📁 <code>{html.escape(short_dir)}</code> • 🕒 <code>{time_stamp}</code>"
         
         full_content = f"{final_raw}\n{footer}"
         chunks = split_markdown_into_html_chunks(full_content, header_html=header, max_chars=3800)
@@ -298,7 +316,7 @@ async def _stream_execution_worker(
             await bot.edit_message_text(
                 chat_id=chat_id,
                 message_id=status_msg_id,
-                text="🛑 <b>Job dibatalkan oleh pengguna.</b>\n<i>Subproses telah dibersihkan tanpa meninggalkan zombie.</i>",
+                text="🛑 <b>Job Dibatalkan oleh Pengguna.</b>\n<i>Subproses telah dimatikan secara bersih.</i>",
                 parse_mode=ParseMode.HTML,
                 reply_markup=build_response_keyboard(),
             )

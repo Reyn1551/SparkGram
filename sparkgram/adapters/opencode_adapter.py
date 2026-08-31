@@ -34,7 +34,8 @@ class OpenCodeAdapter:
         model: Optional[str] = None,
         session_id: Optional[str] = None,
         auto_approve: bool = True,
-        format_mode: str = "default"
+        format_mode: str = "default",
+        files: Optional[List[str]] = None,
     ) -> List[str]:
         """Constructs opencode run arguments."""
         cmd = ["opencode", "run", prompt, "--dir", work_dir, "--format", format_mode]
@@ -43,6 +44,9 @@ class OpenCodeAdapter:
             cmd.extend(["--model", chosen_model])
         if session_id:
             cmd.extend(["--session", session_id])
+        if files:
+            for f in files:
+                cmd.extend(["--file", str(f)])
         if auto_approve:
             cmd.append("--auto")
         return cmd
@@ -54,6 +58,7 @@ class OpenCodeAdapter:
         work_dir: str,
         model: Optional[str] = None,
         session_id: Optional[str] = None,
+        files: Optional[List[str]] = None,
         timeout_sec: float = 600.0,
         on_chunk: Optional[Callable[[str], Any]] = None,
         on_proc_started: Optional[Callable[[asyncio.subprocess.Process], Any]] = None,
@@ -65,7 +70,8 @@ class OpenCodeAdapter:
             model=model,
             session_id=session_id,
             auto_approve=True,
-            format_mode="default"
+            format_mode="default",
+            files=files,
         )
         
         async def line_handler(raw_line: str):
