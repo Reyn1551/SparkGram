@@ -4,8 +4,11 @@ Ensures zero partial writes and corruption-proof state persistence.
 """
 import os
 import json
+import logging
 import tempfile
 from typing import Any, Dict, Optional
+
+log = logging.getLogger(__name__)
 
 
 def atomic_write_text(filepath: str, content: str, encoding: str = "utf-8") -> None:
@@ -25,8 +28,8 @@ def atomic_write_text(filepath: str, content: str, encoding: str = "utf-8") -> N
         if os.path.exists(temp_path):
             try:
                 os.remove(temp_path)
-            except OSError:
-                pass
+            except OSError as e:
+                log.debug(f"Temp cleanup skip {temp_path}: {e}")
         raise
 
 

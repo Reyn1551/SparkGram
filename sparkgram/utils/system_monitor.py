@@ -92,7 +92,8 @@ def get_system_health() -> Dict[str, Any]:
         data["process_ram_mb"] = proc.memory_info().rss / (1024 * 1024)
         data["process_uptime_sec"] = time.time() - proc.create_time()
 
-    except Exception:
+    except Exception as e:
+        log.debug(f"psutil collect fallback: {e}") if 'log' in globals() else None
         # Fallback using standard library
         try:
             root_path = "C:\\" if sys.platform == "win32" else "/"
@@ -100,10 +101,9 @@ def get_system_health() -> Dict[str, Any]:
             data["disk_total_gb"] = du.total / (1024 ** 3)
             data["disk_used_gb"] = (du.total - du.free) / (1024 ** 3)
             data["disk_percent"] = (data["disk_used_gb"] / max(1.0, data["disk_total_gb"])) * 100
-        except Exception:
-            pass
-
-    # 2. Collect GPU metrics via nvidia-smi if present
+        except Exception as e2:
+            import logging as _lg
+            _lg.getLogger(__name__).debug(f"Disk fallback skip: {e2}")
     nvidia_smi = shutil.which("nvidia-smi")
     if nvidia_smi:
         try:
@@ -120,8 +120,9 @@ def get_system_health() -> Dict[str, Any]:
                     data["gpu_vram_used_mb"] = float(parts[2]) if parts[2].isdigit() else None
                     data["gpu_temp_c"] = float(parts[3]) if parts[3].isdigit() else None
                     data["gpu_util_percent"] = float(parts[4]) if parts[4].isdigit() else None
-        except Exception:
-            pass
+        except Exception as e:
+            import logging as _lg2
+            _lg2.getLogger(__name__).debug(f"nvidia-smi skip: {e}")
 
     return data
 

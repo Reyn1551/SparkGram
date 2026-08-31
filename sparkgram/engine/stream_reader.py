@@ -34,7 +34,7 @@ class ConcurrentStreamReader:
                     if len(self.stderr_lines) > 200:
                         self.stderr_lines.pop(0)
         except asyncio.CancelledError:
-            pass
+            log.debug("Stderr drain cancelled — normal shutdown")
         except Exception as e:
             log.debug(f"Stderr drain exception: {e}")
 

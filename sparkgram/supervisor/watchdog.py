@@ -69,14 +69,14 @@ class FileWatchdog:
         try:
             if p.resolve() == settings.state_file.resolve():
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Resolve state_file skip: {e}")
         # Ignore the restart flag itself
         try:
             if p.resolve() == self.restart_flag.resolve():
                 return True
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Resolve restart_flag skip: {e}")
         if name == ".env.example":
             return True
         return False
@@ -112,8 +112,8 @@ class FileWatchdog:
                         seen.add(key)
                         try:
                             mtimes[key] = p.stat().st_mtime
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            log.debug(f"Stat skip {key}: {e}")
                 except Exception:
                     continue
 
@@ -124,8 +124,8 @@ class FileWatchdog:
                     key = str(extra.resolve())
                     if key not in seen:
                         mtimes[key] = extra.stat().st_mtime
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"Extra mtime skip {extra}: {e}")
         return mtimes
 
     def _trigger_graceful_restart(self, reason: str) -> None:
@@ -168,8 +168,8 @@ class FileWatchdog:
                     log.info("Restart flag detected -> restarting process...")
                     try:
                         self.restart_flag.unlink()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug(f"Unlink restart_flag skip: {e}")
                     await asyncio.sleep(0.2)
                     await self._wait_for_idle_and_restart("Restart flag")
                     return

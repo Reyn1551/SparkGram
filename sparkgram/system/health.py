@@ -122,8 +122,8 @@ def _disk_partitions() -> List[Dict[str, Any]]:
                     continue
             if result:
                 return result
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Disk psutil fallback skip: {e}")
     # Fallback: check common mounts/drives
     candidates: List[str] = []
     if os.name == "nt":
@@ -210,8 +210,8 @@ def get_health_snapshot() -> Dict[str, Any]:
                 lines = [l.strip() for l in out.splitlines() if l.strip() and "Name" not in l]
                 if lines:
                     snap["cpu_name"] = lines[0]
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"WMIC cpu name skip: {e}")
 
     # --- memory ---
     if HAS_PSUTIL:
@@ -246,8 +246,8 @@ def get_health_snapshot() -> Dict[str, Any]:
                     "plugged": b.power_plugged,
                     "secsleft": b.secsleft,
                 }
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Battery collect skip: {e}")
     # fallback Windows via WMIC? leave None if unavailable
 
     # --- gpu ---
@@ -290,8 +290,8 @@ def get_health_snapshot() -> Dict[str, Any]:
             for name, entries in temps.items():
                 if entries:
                     snap["temps"][name] = entries[0].current
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"Temps collect skip: {e}")
 
     snap["collected_at"] = now
     return snap

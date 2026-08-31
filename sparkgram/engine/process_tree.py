@@ -76,8 +76,8 @@ class ProcessTreeManager:
             if proc:
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as e:
+                    log.debug(f"Fallback proc.kill skip PID {target_pid}: {e}")
         else:
             # POSIX / Linux / macOS: Send signal to process group
             try:
@@ -86,21 +86,21 @@ class ProcessTreeManager:
                 await asyncio.sleep(0.3)
                 if proc and proc.returncode is None:
                     os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            except ProcessLookupError as e:
+                log.debug(f"Process {target_pid} already gone: {e}")
             except Exception as e:
                 log.warning(f"POSIX process group kill error for PID {target_pid}: {e}")
                 if proc:
                     try:
                         proc.kill()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log.debug(f"POSIX fallback kill skip PID {target_pid}: {e}")
 
         if proc:
             try:
                 await asyncio.wait_for(proc.wait(), timeout=timeout)
-            except (asyncio.TimeoutError, Exception):
-                pass
+            except (asyncio.TimeoutError, Exception) as e:
+                log.debug(f"proc.wait skip PID {target_pid}: {e}")
 
 
 # Global ProcessTreeManager singleton
