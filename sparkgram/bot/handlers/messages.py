@@ -155,7 +155,7 @@ async def _stream_execution_worker(
 
     async def heartbeat_loop():
         """Updates progress ticker and stage every 1.5s when waiting for initial tokens."""
-        nonlocal frame_idx
+        nonlocal frame_idx, last_edit_time
         while not stop_heartbeat.is_set():
             await asyncio.sleep(1.5)
             if stop_heartbeat.is_set() or has_received_output:
@@ -179,6 +179,7 @@ async def _stream_execution_worker(
 
             async with edit_lock:
                 try:
+                    await rate_limiter.acquire(chat_id)
                     await bot.edit_message_text(
                         chat_id=chat_id,
                         message_id=status_msg_id,
@@ -186,6 +187,7 @@ async def _stream_execution_worker(
                         parse_mode=ParseMode.HTML,
                         reply_markup=build_processing_keyboard(),
                     )
+                    last_edit_time = time.monotonic()
                 except Exception:
                     pass
 
@@ -274,24 +276,59 @@ async def _stream_execution_worker(
 
         kb = build_response_keyboard()
 
-        # Edit first chunk
-        if chunks:
-            try:
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=status_msg_id,
-                    text=chunks[0],
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=kb,
-                )
-            except Exception:
-                plain = HTMLTagBalancer.strip_html_tags(chunks[0])
-                await bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=status_msg_id,
-                    text=plain[:3800],
-                    reply_markup=kb,
-                )
+        # Edit first chunk with retry and lock protection
+        async with edit_lock:
+            if chunks:
+                edit_success = False
+                for attempt in range(3):
+                    await rate_limiter.acquire(chat_id)
+                    try:
+                        await bot.edit_message_text(
+                            chat_id=chat_id,
+                            message_id=status_msg_id,
+                            text=chunks[0],
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=kb,
+                        )
+                        edit_success = True
+                        break
+                    except RetryAfter as e:
+                        await asyncio.sleep(e.retry_after + 0.1)
+                    except BadRequest as e:
+                        if "message is not modified" in str(e).lower():
+                            edit_success = True
+                            break
+                        try:
+                            plain = HTMLTagBalancer.strip_html_tags(chunks[0])
+                            await bot.edit_message_text(
+                                chat_id=chat_id,
+                                message_id=status_msg_id,
+                                text=plain[:3800],
+                                reply_markup=kb,
+                            )
+                            edit_success = True
+                            break
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        log.debug(f"Completion edit attempt {attempt+1} error: {e}")
+                        await asyncio.sleep(0.5)
+
+                if not edit_success:
+                    try:
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=chunks[0],
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=kb,
+                        )
+                    except Exception:
+                        plain = HTMLTagBalancer.strip_html_tags(chunks[0])
+                        await bot.send_message(
+                            chat_id=chat_id,
+                            text=plain[:3800],
+                            reply_markup=kb,
+                        )
 
         # Send remaining chunks if response is multi-page
         for remaining_chunk in chunks[1:]:
@@ -313,13 +350,15 @@ async def _stream_execution_worker(
         if not heartbeat_task.done():
             heartbeat_task.cancel()
         try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_msg_id,
-                text="🛑 <b>Job Dibatalkan oleh Pengguna.</b>\n<i>Subproses telah dimatikan secara bersih.</i>",
-                parse_mode=ParseMode.HTML,
-                reply_markup=build_response_keyboard(),
-            )
+            async with edit_lock:
+                await rate_limiter.acquire(chat_id)
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=status_msg_id,
+                    text="🛑 <b>Job Dibatalkan oleh Pengguna.</b>\n<i>Subproses telah dimatikan secara bersih.</i>",
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=build_response_keyboard(),
+                )
         except Exception:
             pass
 
@@ -335,13 +374,15 @@ async def _stream_execution_worker(
                 f"<blockquote expandable>\n{escaped_err}\n</blockquote>\n\n"
                 f"💡 <i>Tip: Gunakan <code>/model</code> untuk switch model atau <code>/sessions</code> untuk reset sesi.</i>"
             )
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=status_msg_id,
-                text=err_msg,
-                parse_mode=ParseMode.HTML,
-                reply_markup=build_response_keyboard(),
-            )
+            async with edit_lock:
+                await rate_limiter.acquire(chat_id)
+                await bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=status_msg_id,
+                    text=err_msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=build_response_keyboard(),
+                )
         except Exception:
             pass
 
