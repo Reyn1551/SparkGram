@@ -20,6 +20,11 @@ from ...core.session_manager import (
     build_sessions_html,
     build_sessions_keyboard,
 )
+from ...core.git_manager import GitManager
+from ...core.macro_manager import macro_manager
+from ...engine.file_explorer import file_explorer, state_cache
+from ...engine.playwright_preview import playwright_preview, VIEWPORT_PRESETS
+from ...engine.port_manager import port_manager
 from ...engine.process_tree import process_supervisor
 from ..middlewares import is_allowed
 
@@ -40,28 +45,37 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_workdir = session_manager.get_chat_workdir(chat_id)
 
     help_text = (
-        f"✨ <b>SparkGram AI Bridge Aktif</b> • <code>{html.escape(settings.runtime_model)}</code>\n\n"
+        f"✨ <b>SparkGram AI Developer Bridge</b> • <code>{html.escape(settings.runtime_model)}</code>\n\n"
         f"WORK_DIR: <code>{html.escape(current_workdir)}</code>\n"
         f"Session aktif: {active_str}\n"
-        f"Mode: <code>{mode}</code> {'('+html.escape(settings.webhook_url)+')' if settings.webhook_url else '(dev, laptop harus nyala)'}\n"
-        f"Model: <code>{html.escape(settings.runtime_model)}</code>\n\n"
-        f"Kirim prompt langsung untuk coding atau refactoring.\n"
-        f"Contoh: <i>buatkan unit test untuk auth service</i>\n\n"
-        f"<b>Daftar Perintah:</b>\n"
-        f"/health - status lengkap hardware laptop/PC (CPU, RAM, Disk, Baterai, GPU)\n"
+        f"Mode: <code>{mode}</code> {'('+html.escape(settings.webhook_url)+')' if settings.webhook_url else '(dev, laptop harus nyala)'}\n\n"
+        f"<b>🌿 Git Cockpit:</b>\n"
+        f"/git - panel status git interaktif (staged, unstaged, branch, 1-tap push)\n"
+        f"/diff [staged] - ringkasan diff kode yang dimodifikasi\n"
+        f"/commit [pesan] - commit perubahan staged ke git\n"
+        f"/push [remote] - push branch ke remote repo\n\n"
+        f"<b>🎛️ Developer Recipes & Macros:</b>\n"
+        f"/macro - buka Recipe Hub interaktif\n"
+        f"/review - review security & logic pada git diff staged\n"
+        f"/testgen [file] - otomatis buat unit test pytest\n"
+        f"/explain [file] - analisis alur data & tracing modul\n"
+        f"/refactor [file] - clean code & optimize modul\n\n"
+        f"<b>📁 File Explorer & Artifacts:</b>\n"
+        f"/files [subpath] - jelajahi folder proyek via inline button\n"
+        f"/tree - lihat struktur file dan folder\n"
+        f"/cat [file] - baca cuplikan file kode\n"
+        f"/download [file|dir] - unduh file atau arsip .zip bersih\n\n"
+        f"<b>📸 UI Preview & Ports:</b>\n"
+        f"/preview [port|url] - foto live screenshot web di localhost\n"
+        f"/ports - lihat & matikan dev server port lokal (3000, 5173, dll)\n"
+        f"/killport [port] - bunuh proses yang menduduki port tertentu\n\n"
+        f"<b>🤖 Sesi & Model:</b>\n"
         f"/model [list|1-7] - pilih model AI 1-tap (Spark, Groq, DeepSeek, Claude, dll)\n"
-        f"/sessions [n] [kata] - list session di WORK_DIR (tap nomor untuk switch)\n"
+        f"/sessions [n] [kata] - list session (tap nomor untuk switch)\n"
         f"/switch [n|ses_xxx] - ganti session aktif\n"
         f"/workdir [path|list] - ganti/lihat project directory\n"
         f"/new - session baru (reset konteks)\n"
-        f"/status - status queue & runtime\n"
-        f"/rename [judul] - rename session aktif\n"
-        f"/delete [ses_xxx] - hapus session\n"
-        f"/fork [pesan] - fork session aktif\n"
-        f"/export - export session ke file Markdown\n"
-        f"/logs [n] - tail log bridge\n"
-        f"/cancel - batalkan job yang sedang berjalan\n"
-        f"/pwd /id /restart /help"
+        f"/health /status /export /logs /cancel /restart"
     )
 
     if update.message:
@@ -464,3 +478,502 @@ async def restart_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
     # Exit process cleanly to allow supervisor to restart
     sys.exit(0)
+
+
+# -------------------------------------------------------------
+# Git Cockpit & Diff Commands
+# -------------------------------------------------------------
+async def build_git_cockpit_ui(work_dir: str):
+    """Generates visual Git Cockpit HTML card and interactive control buttons."""
+    gm = GitManager(work_dir)
+    status = await gm.get_status_summary()
+    repo_name = Path(work_dir).name
+
+    if not status.get("is_repo"):
+        text = (
+            f"🌿 <b>Git Cockpit:</b> <code>{html.escape(repo_name)}</code>\n"
+            f"⚠️ <i>Direktori ini bukan repositori Git aktif.</i>\n\n"
+            f"Gunakan <code>/workdir</code> untuk berpindah ke folder proyek Git."
+        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📁 Ganti WORK_DIR", callback_data="sw:workdir")],
+            [InlineKeyboardButton("🔄 Cek Ulang", callback_data="git:status")]
+        ])
+        return text, keyboard
+
+    branch = status.get("branch", "unknown")
+    staged = status.get("staged", [])
+    unstaged = status.get("unstaged", [])
+    untracked = status.get("untracked", [])
+    stats = status.get("stats", {"added": 0, "deleted": 0})
+
+    text = (
+        f"🌿 <b>Git Cockpit</b> • <code>{html.escape(repo_name)}</code> (<code>{html.escape(branch)}</code>)\n"
+        f"📊 <b>Status:</b> {len(staged)} staged, {len(unstaged)} unstaged, {len(untracked)} untracked (<b>+{stats['added']} / -{stats['deleted']}</b>)\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+    )
+
+    if staged:
+        text += "<b>Staged Changes:</b>\n"
+        for f in staged[:6]:
+            text += f"🟢 <code>{html.escape(f)}</code>\n"
+        if len(staged) > 6:
+            text += f"<i>...dan {len(staged)-6} file lainnya</i>\n"
+        text += "\n"
+
+    if unstaged:
+        text += "<b>Unstaged Modifications:</b>\n"
+        for f in unstaged[:6]:
+            text += f"🟡 <code>{html.escape(f)}</code>\n"
+        if len(unstaged) > 6:
+            text += f"<i>...dan {len(unstaged)-6} file lainnya</i>\n"
+        text += "\n"
+
+    if untracked:
+        text += "<b>Untracked Files:</b>\n"
+        for f in untracked[:4]:
+            text += f"⚪ <code>{html.escape(f)}</code>\n"
+        if len(untracked) > 4:
+            text += f"<i>...dan {len(untracked)-4} file lainnya</i>\n"
+        text += "\n"
+
+    if not staged and not unstaged and not untracked:
+        text += "✨ <i>Working tree clean (tidak ada perubahan kode).</i>\n"
+
+    text += "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    buttons = [
+        [
+            InlineKeyboardButton("🔍 Diff Staged", callback_data="git:diff_stg"),
+            InlineKeyboardButton("🔍 Diff All", callback_data="git:diff_all"),
+        ],
+        [
+            InlineKeyboardButton("➕ Stage All", callback_data="git:stage_all"),
+            InlineKeyboardButton("➖ Unstage All", callback_data="git:unstage_all"),
+        ],
+        [
+            InlineKeyboardButton("✨ AI Commit", callback_data="git:ai_commit"),
+            InlineKeyboardButton("🚀 Push Remote", callback_data="git:push"),
+        ],
+        [
+            InlineKeyboardButton("📥 Ekspor .patch", callback_data="git:export_patch"),
+            InlineKeyboardButton("🔄 Refresh", callback_data="git:status"),
+        ]
+    ]
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def git_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /git command."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    text, kb = await build_git_cockpit_ui(work_dir)
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def diff_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /diff [staged] command."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    args = context.args or []
+    staged_only = len(args) > 0 and args[0].lower() == "staged"
+
+    gm = GitManager(work_dir)
+    ok, diff_text, stats = await gm.get_diff(staged_only=staged_only)
+
+    if not ok:
+        if update.message:
+            await update.message.reply_text(f"❌ {diff_text}", parse_mode=ParseMode.HTML)
+        return
+
+    if not diff_text:
+        msg = "✨ <b>Tidak ada perubahan kode yang belum di-commit.</b>"
+        if update.message:
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        return
+
+    mode_label = "Staged" if staged_only else "All Working Tree"
+    header = (
+        f"📝 <b>Git Diff ({mode_label})</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🟢 <b>+{stats['added']}</b> Baris   🔴 <b>-{stats['deleted']}</b> Baris   📁 <b>{stats['files_count']}</b> Berkas\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    if len(diff_text) > 3200:
+        truncated = diff_text[:3200] + "\n\n... (diff terpotong — gunakan tombol Ekspor .patch)"
+        body = f"<blockquote expandable><pre><code class=\"language-diff\">{html.escape(truncated)}</code></pre></blockquote>"
+    else:
+        body = f"<blockquote expandable><pre><code class=\"language-diff\">{html.escape(diff_text)}</code></pre></blockquote>"
+
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📥 Ekspor .patch", callback_data="git:export_patch"),
+            InlineKeyboardButton("✨ AI Commit", callback_data="git:ai_commit"),
+        ],
+        [InlineKeyboardButton("🌿 Kembali ke Git Cockpit", callback_data="git:status")]
+    ])
+    if update.message:
+        await update.message.reply_text(header + body, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def commit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /commit <pesan> command."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    msg_parts = context.args or []
+    commit_msg = " ".join(msg_parts).strip()
+
+    gm = GitManager(work_dir)
+    status = await gm.get_status_summary()
+
+    if not status.get("staged"):
+        if update.message:
+            await update.message.reply_text(
+                "⚠️ <b>Tidak ada perubahan staged.</b>\n"
+                "Gunakan <code>/git</code> lalu tap <b>➕ Stage All</b> terlebih dahulu, atau ketik <code>/commit -a <pesan></code>.",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    if not commit_msg:
+        commit_msg = gm.generate_ai_commit_message(status)
+
+    ok, res = await gm.commit(commit_msg)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🚀 Push Remote Sekarang", callback_data="git:push")]])
+    if update.message:
+        if ok:
+            await update.message.reply_text(res, parse_mode=ParseMode.HTML, reply_markup=kb)
+        else:
+            await update.message.reply_text(f"❌ {res}", parse_mode=ParseMode.HTML)
+
+
+async def push_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /push [remote] [branch] command."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    args = context.args or []
+    remote = args[0] if len(args) > 0 else "origin"
+    branch = args[1] if len(args) > 1 else None
+
+    if update.message:
+        wait_msg = await update.message.reply_text("🚀 <b>Sedang melakukan git push ke remote...</b>", parse_mode=ParseMode.HTML)
+    else:
+        wait_msg = None
+
+    gm = GitManager(work_dir)
+    ok, res = await gm.push(remote=remote, branch=branch)
+
+    if wait_msg:
+        await wait_msg.edit_text(res, parse_mode=ParseMode.HTML)
+
+
+# -------------------------------------------------------------
+# Developer Macro Hub & Recipes
+# -------------------------------------------------------------
+def build_macro_hub_ui():
+    """Generates interactive Macro Hub menu."""
+    recipes = macro_manager.list_recipes()
+    text = (
+        "🎛️ <b>Developer Recipe & Macro Hub</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "Pilih template otomasi cerdas untuk dieksekusi pada repositori aktif:\n\n"
+    )
+    buttons = []
+    for r in recipes:
+        text += f"{r['emoji']} <b>/{r['id']}</b> — {r['name']}\n<i>{r['description']}</i>\n\n"
+        buttons.append([
+            InlineKeyboardButton(f"{r['emoji']} Jalankan /{r['id']}", callback_data=f"macro:run:{r['id']}")
+        ])
+    text += "━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    return text, InlineKeyboardMarkup(buttons)
+
+
+async def macro_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /macro [resep] command."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    if args:
+        recipe_id = args[0].lower()
+        await _dispatch_macro(update, context, recipe_id, " ".join(args[1:]))
+        return
+
+    text, kb = build_macro_hub_ui()
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def _dispatch_macro(update: Update, context: ContextTypes.DEFAULT_TYPE, recipe_id: str, target: str = ""):
+    """Helper to assemble macro prompt and trigger AI streaming execution."""
+    from .messages import execute_prompt_task
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+
+    ok, prompt, title = await macro_manager.build_macro_prompt(
+        recipe_id=recipe_id,
+        work_dir=work_dir,
+        target=target,
+    )
+    if not ok:
+        # Fix: support both Command (/refactor) and Callback (macro:run:refactor) contexts
+        # When triggered via inline button, update.message is None — use bot.send_message
+        err_text = prompt
+        # Add helper for file-target recipes
+        if "memerlukan argumen nama file" in prompt:
+            err_text += f"\n\n💡 <i>Tap /files untuk pilih file, lalu kirim:</i> <code>/{recipe_id} sparkgram/config.py</code>"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("📁 Buka File Explorer", callback_data="fe:cd:.")]])
+        else:
+            kb = None
+        try:
+            if update.message:
+                await update.message.reply_text(err_text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            elif update.callback_query:
+                await context.bot.send_message(chat_id=chat_id, text=err_text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            else:
+                await context.bot.send_message(chat_id=chat_id, text=err_text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:
+            pass
+        return
+
+    try:
+        if update.message:
+            await update.message.reply_text(f"🚀 <b>Mengeksekusi Recipe: {title}</b>...", parse_mode=ParseMode.HTML)
+        elif update.callback_query:
+            await context.bot.send_message(chat_id=chat_id, text=f"🚀 <b>Mengeksekusi Recipe: {title}</b>...", parse_mode=ParseMode.HTML)
+    except Exception:
+        pass
+
+    await execute_prompt_task(
+        bot=context.bot,
+        chat_id=chat_id,
+        prompt=prompt,
+        message_to_reply=update.effective_message,
+    )
+
+
+async def review_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /review shortcut."""
+    if not is_allowed(update):
+        return
+    await _dispatch_macro(update, context, "review")
+
+
+async def testgen_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /testgen <file> shortcut."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    target = args[0] if args else ""
+    await _dispatch_macro(update, context, "testgen", target=target)
+
+
+async def explain_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /explain <target> shortcut."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    target = " ".join(args) if args else ""
+    await _dispatch_macro(update, context, "explain", target=target)
+
+
+async def refactor_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /refactor <target> shortcut."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    target = " ".join(args) if args else ""
+    await _dispatch_macro(update, context, "refactor", target=target)
+
+
+# -------------------------------------------------------------
+# File Explorer & Artifact Delivery
+# -------------------------------------------------------------
+async def files_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /files and /tree commands."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    args = context.args or []
+    subpath = args[0] if args else ""
+
+    text, kb = file_explorer.build_file_tree_ui(base_dir=work_dir, current_subpath=subpath, page=0)
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def cat_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /cat <filepath> command."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    args = context.args or []
+    if not args:
+        if update.message:
+            await update.message.reply_text("⚠️ Gunakan: <code>/cat <nama_file></code>", parse_mode=ParseMode.HTML)
+        return
+
+    rel_path = args[0]
+    ok, content = file_explorer.read_file_preview(base_dir=work_dir, rel_path=rel_path)
+    if update.message:
+        token = state_cache.register_path(rel_path)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📥 Unduh File Utuh", callback_data=f"fe:dl:{token}")]])
+        await update.message.reply_text(content, parse_mode=ParseMode.HTML, reply_markup=kb if ok else None)
+
+
+async def download_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /download <filepath|dirpath> command."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    args = context.args or []
+    target_str = args[0] if args else ""
+
+    try:
+        target = file_explorer.safe_resolve(work_dir, target_str)
+    except Exception as e:
+        if update.message:
+            await update.message.reply_text(f"❌ {e}", parse_mode=ParseMode.HTML)
+        return
+
+    if target.is_file():
+        if update.message:
+            await update.message.reply_document(
+                document=open(target, "rb"),
+                filename=target.name,
+                caption=f"📄 <code>{html.escape(target.name)}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+    else:
+        ok, zip_bytes, zip_name = file_explorer.create_safe_zip(base_dir=work_dir, rel_path=target_str)
+        if ok and zip_bytes:
+            if update.message:
+                import io
+                await update.message.reply_document(
+                    document=io.BytesIO(zip_bytes),
+                    filename=zip_name,
+                    caption=f"📦 Arsip Zip: <code>{html.escape(zip_name)}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
+        else:
+            if update.message:
+                await update.message.reply_text(f"❌ Gagal membuat zip: {zip_name}", parse_mode=ParseMode.HTML)
+
+
+# -------------------------------------------------------------
+# Visual UI Preview & Ports Management
+# -------------------------------------------------------------
+async def preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /preview [port|url] and /snap commands."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    target = args[0] if args else None
+
+    if not target:
+        detected_port = playwright_preview.detect_active_dev_port()
+        if detected_port:
+            target = str(detected_port)
+        else:
+            target = "3000"
+
+    wait_msg = None
+    if update.message:
+        wait_msg = await update.message.reply_text(
+            f"📸 <i>Mengambil snapshot UI live untuk <code>{html.escape(str(target))}</code>...</i>",
+            parse_mode=ParseMode.HTML,
+        )
+
+    ok, img_bytes, meta = await playwright_preview.capture_url(
+        url_or_port=target,
+        viewport_type="desktop",
+    )
+
+    if not ok or not img_bytes:
+        err_msg = meta.get("error", "Gagal mengambil snapshot.")
+        if wait_msg:
+            await wait_msg.edit_text(
+                f"❌ <b>Gagal Preview UI:</b> {html.escape(err_msg)}\n\n"
+                f"<i>Tips: Pastikan server lokal kamu sedang berjalan (misal: <code>http://localhost:{target}</code>).</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    url = meta.get("url", target)
+    render_time = meta.get("render_time_ms", 0)
+    status_code = meta.get("status", 200)
+    v_name = meta.get("viewport_name", "Desktop")
+    token = state_cache.register_path(target)
+
+    caption = (
+        f"📸 <b>Web Preview:</b> <code>{html.escape(url)}</code>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🌐 Status: <code>{status_code}</code> • ⏱️ Render: <code>{render_time}ms</code>\n"
+        f"📐 Viewport: <b>{v_name}</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    )
+
+    kb = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📱 Mobile (390px)", callback_data=f"pw:vw:{token}:mobile"),
+            InlineKeyboardButton("💻 Desktop (1440p)", callback_data=f"pw:vw:{token}:desktop"),
+        ],
+        [
+            InlineKeyboardButton("🔄 Refresh Snapshot", callback_data=f"pw:rf:{token}:desktop"),
+            InlineKeyboardButton("📜 Console Logs", callback_data=f"pw:log:{token}"),
+        ],
+        [InlineKeyboardButton("📥 Unduh Gambar HD", callback_data=f"pw:hd:{token}:desktop")]
+    ])
+
+    if wait_msg:
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+
+    import io
+    if update.message:
+        await update.message.reply_photo(
+            photo=io.BytesIO(img_bytes),
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_markup=kb,
+        )
+
+
+async def ports_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /ports command to list active TCP listening ports."""
+    if not is_allowed(update):
+        return
+    text, kb = port_manager.build_ports_ui()
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def killport_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /killport <port> command."""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    if not args or not args[0].isdigit():
+        if update.message:
+            await update.message.reply_text("⚠️ Gunakan: <code>/killport <nomor_port></code> (contoh: <code>/killport 3000</code>)", parse_mode=ParseMode.HTML)
+        return
+
+    port_num = int(args[0])
+    ok, msg, _ = port_manager.kill_port(port_num)
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔌 Buka Panel Ports", callback_data="port:list")]])
+    if update.message:
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=kb)
