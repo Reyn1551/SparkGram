@@ -110,17 +110,32 @@ while ($true) {
         $exitCode = $proc.ExitCode
         if ($null -eq $exitCode) { $exitCode = -1 }
         $timestamp2 = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        $msg2 = "[$timestamp2] Bridge exited with code $exitCode"
-        Write-Host $msg2 -ForegroundColor Yellow
+        $isIntentional = ($exitCode -eq 0)
+        if ($isIntentional) {
+            $msg2 = "[$timestamp2] Bridge stopped intentional (code 0, watchdog/manual restart) -- will restart clean"
+            Write-Host $msg2 -ForegroundColor Green
+        } else {
+            $msg2 = "[$timestamp2] Bridge exited with code $exitCode (unexpected -- check tail)"
+            Write-Host $msg2 -ForegroundColor Yellow
+        }
         Add-Content -Path $LogFile -Value $msg2
         try {
-            if (Test-Path $stderr) {
-                $tail = Get-Content $stderr -Tail 15 -ErrorAction SilentlyContinue | Out-String
-                if ($tail.Trim()) { Add-Content -Path $LogFile -Value "--- stderr tail ---`n$tail`n--- end ---" }
-            }
-            if (Test-Path $stdout) {
-                $tail2 = Get-Content $stdout -Tail 8 -ErrorAction SilentlyContinue | Out-String
-                if ($tail2.Trim()) { Add-Content -Path $LogFile -Value "--- stdout tail ---`n$tail2`n--- end ---" }
+            if (-not $isIntentional) {
+                if (Test-Path $stderr) {
+                    $tail = Get-Content $stderr -Tail 15 -ErrorAction SilentlyContinue | Out-String
+                    if ($tail.Trim()) { Add-Content -Path $LogFile -Value "--- stderr tail ---`n$tail`n--- end ---" }
+                }
+                if (Test-Path $stdout) {
+                    $tail2 = Get-Content $stdout -Tail 12 -ErrorAction SilentlyContinue | Out-String
+                    # filter noisy SystemExit tail for intentional restarts (already handled)
+                    if ($tail2.Trim() -and $tail2 -notmatch "SystemExit") { Add-Content -Path $LogFile -Value "--- stdout tail ---`n$tail2`n--- end ---" }
+                }
+            } else {
+                # intentional: only log 3 lines for audit, no error tail
+                if (Test-Path $stdout) {
+                    $tail2 = Get-Content $stdout -Tail 3 -ErrorAction SilentlyContinue | Out-String
+                    if ($tail2.Trim()) { Add-Content -Path $LogFile -Value "--- intentional restart tail ---`n$tail2`n--- end ---" }
+                }
             }
         } catch {}
     } catch {
@@ -132,9 +147,14 @@ while ($true) {
     }
     $restartCount++
     # STABIL: capped 5s flat (dulu 5→60s bikin mati 60 detik) — env MAX_BACKOFF override jika perlu
+    # Fix: intentional exit 0 tidak dihitung sebagai crash (reset backoff lebih lambat)
     if ($env:MAX_BACKOFF) { $maxBackoff = [int]$env:MAX_BACKOFF }
-    $sleepSec = 5
-    if ($restartCount -gt 10) { $sleepSec = $maxBackoff }
+    if ($isIntentional -and $restartCount -lt 50) {
+        $sleepSec = 2  # watchdog restart cepat, bukan error
+    } else {
+        $sleepSec = 5
+        if ($restartCount -gt 10) { $sleepSec = $maxBackoff }
+    }
     $stopSignal = Join-Path $LogDir "STOP"
     if (Test-Path $stopSignal) {
         Add-Content -Path $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] STOP signal detected -- tidak restart lagi"

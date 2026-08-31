@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sparkgram"
+version = "1.0.0"
+description = "High-performance, rock-solid remote AI coding companion via Telegram"
+readme = "README.md"
+authors = [{ name = "Reynboo & Antigravity" }]
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = [
+    "python-telegram-bot>=22.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[project.scripts]
+sparkgram = "sparkgram.main:run_bot"
+sparkgram-wizard = "sparkgram.cli.wizard:run_setup_wizard"
