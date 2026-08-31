@@ -1,9 +1,7 @@
 """
 Self-Healing File Watcher and Auto-Restart for SparkGram.
 Monitors source files and restarts daemon cleanly upon code changes.
-
-Fix v2: graceful shutdown (no SystemExit traceback), ignore list, debounce,
-        detection of added/deleted files, bounded errors.
+Ensures zero-interruption: waits for active prompt tasks to complete before restarting.
 """
 import asyncio
 import logging
@@ -18,7 +16,7 @@ log = logging.getLogger(__name__)
 _IGNORE_DIRS = {
     "__pycache__", ".git", ".venv", "venv", ".pytest_cache",
     "node_modules", ".mypy_cache", ".ruff_cache", "logs", "tmp",
-    ".codebase-memory",
+    ".codebase-memory", "images", "exports",
 }
 _IGNORE_FILES = {
     ".bridge_state.json",
@@ -30,20 +28,17 @@ _IGNORE_FILES = {
     "runner_out.log",
     "runner_err.log",
 }
-# json files that are state/config, not code
 _IGNORE_JSON_NAMES = {
     ".bridge_state.json",
     "railway.json",
-    "fly.toml",  # not json but keep
+    "fly.toml",
 }
-# Extensions to watch
 _WATCH_EXTS = (".py", ".json", ".env")
-# Also watch bare .env files (no extension handling via rglob *.env)
 _WATCH_GLOBS = ("*.py", "*.json", ".env", "*.env")
 
 
 class FileWatchdog:
-    """Monitors mtimes of source code files with debounce and graceful shutdown."""
+    """Monitors mtimes of source code files with debounce, active task safety, and graceful shutdown."""
 
     def __init__(self, watch_dir: Path, debounce_sec: float = 4.0):
         self.watch_dir = watch_dir.resolve()
@@ -68,7 +63,7 @@ class FileWatchdog:
         if name in _IGNORE_JSON_NAMES:
             return True
         # Ignore temp/log files
-        if name.endswith(".log") or name.endswith(".pid") or name.endswith(".lock"):
+        if name.endswith(".log") or name.endswith(".pid") or name.endswith(".lock") or name.endswith(".tmp"):
             return True
         # Ignore state file exact path
         try:
@@ -76,29 +71,27 @@ class FileWatchdog:
                 return True
         except Exception:
             pass
-        # Ignore the restart flag itself (handled separately)
+        # Ignore the restart flag itself
         try:
             if p.resolve() == self.restart_flag.resolve():
                 return True
         except Exception:
             pass
-        # Ignore hidden .env.example
         if name == ".env.example":
             return True
         return False
 
     def _collect_mtimes(self) -> dict:
         mtimes: dict[str, float] = {}
-        # Opt1: if watch_dir is project root, only scan sparkgram/ + root config (not WORK_DIR blob)
         scan_dirs = []
         try:
             if self.watch_dir == settings.root_dir:
-                # Prefer sparkgram package only (95% of code) + root .env files
                 scan_dirs = [settings.root_dir / "sparkgram"]
             else:
                 scan_dirs = [self.watch_dir]
         except Exception:
             scan_dirs = [self.watch_dir]
+
         patterns = ("*.py", "*.json", ".env", "*.env")
         seen: set[str] = set()
         for base in scan_dirs:
@@ -123,7 +116,8 @@ class FileWatchdog:
                             pass
                 except Exception:
                     continue
-        # Always include root .env / .env.example mtime (cheap, not via rglob)
+
+        # Always include root .env / pyproject.toml mtime
         for extra in [settings.root_dir / ".env", settings.root_dir / "pyproject.toml"]:
             try:
                 if extra.exists() and not self._is_ignored(extra):
@@ -140,21 +134,27 @@ class FileWatchdog:
             return
         self._stopping = True
         log.info(f"{reason} -> graceful restart (debounce {self.debounce_sec}s)")
-        # Prefer PTB graceful stop; fallback to os._exit(0) outside event loop
         try:
             if self._app is not None:
-                # stop_running() is designed to break run_polling/run_webhook
                 self._app.stop_running()
                 log.info("Called app.stop_running() for restart")
                 return
         except Exception as e:
             log.warning(f"stop_running failed: {e}")
-        # Fallback: _exit(0) avoids SystemExit traceback and gives clean exit code 0
         try:
             os._exit(0)
         except Exception:
             import sys
             sys.exit(0)
+
+    async def _wait_for_idle_and_restart(self, reason: str) -> None:
+        """Waits until all active prompt tasks finish before restarting."""
+        from ..core.session_manager import session_manager
+        # Wait while any task is actively running
+        while any(not t.done() for t in session_manager.active_tasks.values()):
+            log.info("Watchdog deferring restart: waiting for active tasks to complete...")
+            await asyncio.sleep(2.0)
+        self._trigger_graceful_restart(reason)
 
     async def watch_loop(self) -> None:
         """Background loop checking for file changes or restart flag."""
@@ -171,7 +171,7 @@ class FileWatchdog:
                     except Exception:
                         pass
                     await asyncio.sleep(0.2)
-                    self._trigger_graceful_restart("Restart flag")
+                    await self._wait_for_idle_and_restart("Restart flag")
                     return
 
                 # 2. Check mtimes if auto-restart enabled
@@ -186,7 +186,6 @@ class FileWatchdog:
 
                 # Detect added / deleted / modified
                 changed_path = None
-                # Modified or added
                 for fpath, mtime in current_mtimes.items():
                     prev = self._last_mtimes.get(fpath)
                     if prev is None:
@@ -195,7 +194,6 @@ class FileWatchdog:
                     if mtime > prev + 0.05:  # 50ms jitter tolerance
                         changed_path = fpath
                         break
-                # Deleted
                 if changed_path is None:
                     for fpath in self._last_mtimes:
                         if fpath not in current_mtimes:
@@ -205,9 +203,7 @@ class FileWatchdog:
                 if changed_path:
                     log.info(f"File modified: {changed_path} -> debouncing restart {self.debounce_sec}s")
                     await asyncio.sleep(self.debounce_sec)
-                    # Re-collect to avoid storm of rapid saves triggering multiple restarts
-                    # If still changed after debounce, trigger
-                    self._trigger_graceful_restart(f"File modified: {changed_path}")
+                    await self._wait_for_idle_and_restart(f"File modified: {changed_path}")
                     return
 
                 self._last_mtimes = current_mtimes
@@ -215,6 +211,5 @@ class FileWatchdog:
             log.info("Watchdog cancelled -- normal shutdown")
             return
         except Exception as e:
-            # Never crash the bot due to watchdog bug; log and disable watchdog
             log.error(f"Watchdog fatal error (disabling watchdog, bot stays alive): {e}", exc_info=True)
             return
