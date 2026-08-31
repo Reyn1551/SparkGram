@@ -79,6 +79,57 @@ def md_to_telegram_html(md: str, enable_expandable_blockquotes: bool = True) -> 
 
     text = re.sub(r"(?:^>[^\n]*\n?)+", blockquote_replacer, text, flags=re.MULTILINE)
 
+    # 4b. Markdown Tables -> Mobile-friendly Card (no ASCII garis, no misalignment)
+    # Detects | header | header | + |---| separator + | rows |
+    tables: List[str] = []
+
+    def table_replacer(match):
+        block = match.group(0).strip()
+        lines = [l.strip() for l in block.splitlines() if l.strip()]
+        if len(lines) < 2:
+            return block
+        # Parse headers
+        def split_row(r: str) -> List[str]:
+            r = r.strip()
+            if r.startswith("|"):
+                r = r[1:]
+            if r.endswith("|"):
+                r = r[:-1]
+            return [c.strip() for c in r.split("|")]
+        headers = split_row(lines[0])
+        # Second line must be separator
+        if not re.match(r"^[\s|:\-]+$", lines[1]):
+            return block
+        data_rows = [split_row(l) for l in lines[2:]]
+        if not data_rows:
+            return block
+        # Build card: single expandable blockquote with vertical rows (no column alignment)
+        card_lines: List[str] = []
+        card_lines.append(f"📊 <b>Tabel — {len(data_rows)} baris × {len(headers)} kolom</b>")
+        for idx, row in enumerate(data_rows, start=1):
+            # Pad row to headers len
+            while len(row) < len(headers):
+                row.append("")
+            # Title = first cell
+            title = html.escape(row[0] or f"Baris {idx}", quote=False)
+            card_lines.append("━━━━━━━━━━━━━━━━━━━━")
+            card_lines.append(f"<b>{idx}. {title}</b>")
+            # Show remaining cols as bullets (skip first col to avoid duplicate title)
+            for h, c in zip(headers[1:], row[1:]):
+                h_esc = html.escape(h, quote=False)
+                c_esc = html.escape(c, quote=False)
+                if c_esc:
+                    card_lines.append(f"• <b>{h_esc}:</b> <code>{c_esc}</code>")
+                else:
+                    card_lines.append(f"• <b>{h_esc}:</b> —")
+        inner = "\n".join(card_lines)
+        tag = f"{bq_tag_open}\n{inner}\n</blockquote>"
+        tables.append(tag)
+        return f"\x00TB{len(tables)-1}\x00"
+
+    # Match table blocks: header + separator + at least 1 data row
+    text = re.sub(r"(?:^\|.*\|\s*\n)+(?:^\|[\s|:\-]+\|\s*\n)(?:^\|.*\|\s*\n?)+", table_replacer, text, flags=re.MULTILINE)
+
     # 5. Escape remaining HTML in text
     text = html.escape(text, quote=False)
 
@@ -113,7 +164,9 @@ def md_to_telegram_html(md: str, enable_expandable_blockquotes: bool = True) -> 
 
     text = re.sub(r"\[([^\]]+)\]\((https?://[^)\s]+)\)", link_replacer, text)
 
-    # 12. Restore blockquotes
+    # 12. Restore tables then blockquotes
+    for idx, tb_tag in enumerate(tables):
+        text = text.replace(f"\x00TB{idx}\x00", tb_tag)
     for idx, bq_tag in enumerate(blockquotes):
         text = text.replace(f"\x00BQ{idx}\x00", bq_tag)
 
