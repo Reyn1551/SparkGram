@@ -63,10 +63,12 @@ class Settings:
         self.feature_doc: bool = os.getenv("FEATURE_DOC", "1").strip().lower() in ("1", "true", "yes")
         self.feature_queue: bool = os.getenv("FEATURE_QUEUE", "1").strip().lower() in ("1", "true", "yes")
         
-        # Rate Limits & Buffering
+        # Rate Limits & Buffering (Opt3: 1.5s throttle to avoid 429)
         self.max_backoff: float = float(os.getenv("MAX_BACKOFF", "5.0"))
-        self.rate_limit_sec: float = float(os.getenv("RATE_LIMIT_SEC", "1.2"))
+        self.rate_limit_sec: float = float(os.getenv("RATE_LIMIT_SEC", "1.5"))
         self.global_rate_limit: float = float(os.getenv("GLOBAL_RATE_LIMIT", "28.0"))
+        self.max_sessions: int = int(os.getenv("MAX_SESSIONS", "20"))
+        self.session_ttl_days: int = int(os.getenv("SESSION_TTL_DAYS", "7"))
         
         # Logging & Temp directory
         temp_base = os.getenv("TEMP") or os.getenv("TMP") or "/tmp"

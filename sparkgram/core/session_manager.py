@@ -57,14 +57,34 @@ class SessionManager:
             settings.runtime_work_dir = data["runtime_work_dir"]
 
     def save_state(self) -> None:
-        """Atomically saves state to disk."""
-        # Prune older entries if dictionary exceeds 50 chats
-        if len(self.active_sessions) > 50:
-            keys_to_keep = list(self.active_sessions.keys())[-50:]
+        """Atomically saves state to disk with Opt4 caps."""
+        # Opt4: cap via settings.max_sessions (default 20) — LRU keep newest
+        cap = max(5, settings.max_sessions)
+        if len(self.active_sessions) > cap:
+            keys_to_keep = list(self.active_sessions.keys())[-cap:]
             self.active_sessions = {k: self.active_sessions[k] for k in keys_to_keep}
-        if len(self.chat_workdirs) > 50:
-            keys_to_keep = list(self.chat_workdirs.keys())[-50:]
+            log.info(f"Pruned active_sessions to {cap} (LRU)")
+        if len(self.chat_workdirs) > cap * 2:
+            keys_to_keep = list(self.chat_workdirs.keys())[-(cap * 2):]
             self.chat_workdirs = {k: self.chat_workdirs[k] for k in keys_to_keep}
+            log.info(f"Pruned chat_workdirs to {cap*2}")
+
+    def cleanup_expired_state(self) -> None:
+        """Opt4: remove stale workdir mappings whose dirs no longer exist or TTL exceeded."""
+        try:
+            if not self.state_file.exists():
+                return
+            mtime = self.state_file.stat().st_mtime
+            age_days = (datetime.datetime.now().timestamp() - mtime) / 86400
+            if age_days > settings.session_ttl_days:
+                dead = [cid for cid, wd in self.chat_workdirs.items() if not Path(wd).exists()]
+                if dead:
+                    for cid in dead:
+                        self.chat_workdirs.pop(cid, None)
+                    log.info(f"Cleaned {len(dead)} dead workdirs (TTL {settings.session_ttl_days}d)")
+                    self.save_state()
+        except Exception as e:
+            log.debug(f"cleanup_expired_state skip: {e}")
 
         data = {
             "active_sessions": {str(k): v for k, v in self.active_sessions.items()},

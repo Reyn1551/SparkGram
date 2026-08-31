@@ -20,7 +20,9 @@ from ...core.session_manager import session_manager
 from ...formatters.markdown_html import split_markdown_into_html_chunks, md_to_telegram_html
 from ...formatters.html_balancer import HTMLTagBalancer
 from ...adapters.opencode_adapter import OpenCodeAdapter
+from ...engine.process_tree import process_supervisor
 from ...ratelimit.token_bucket import rate_limiter
+from ...ratelimit.circuit_breaker import telegram_circuit
 from ..middlewares import is_allowed
 
 log = logging.getLogger(__name__)
@@ -179,6 +181,9 @@ async def _stream_execution_worker(
 
             async with edit_lock:
                 try:
+                    if not await telegram_circuit.can_execute():
+                        log.warning("Circuit OPEN — heartbeat skip")
+                        continue
                     await rate_limiter.acquire(chat_id)
                     await bot.edit_message_text(
                         chat_id=chat_id,
@@ -187,9 +192,14 @@ async def _stream_execution_worker(
                         parse_mode=ParseMode.HTML,
                         reply_markup=build_processing_keyboard(),
                     )
+                    await telegram_circuit.record_success()
                     last_edit_time = time.monotonic()
-                except Exception:
-                    pass
+                except RetryAfter as e:
+                    await telegram_circuit.record_failure(retry_after=float(e.retry_after))
+                    await asyncio.sleep(e.retry_after + 0.5)
+                except Exception as e:
+                    await telegram_circuit.record_failure()
+                    log.debug(f"Heartbeat edit error: {e}")
 
     heartbeat_task = asyncio.create_task(heartbeat_loop())
 
@@ -216,7 +226,10 @@ async def _stream_execution_worker(
                 if not chunks:
                     return
 
-                # Acquire rate limiter tokens
+                # Acquire rate limiter + circuit breaker
+                if not await telegram_circuit.can_execute():
+                    log.warning("Circuit OPEN — streaming edit skipped")
+                    return
                 await rate_limiter.acquire(chat_id)
                 try:
                     await bot.edit_message_text(
@@ -226,22 +239,32 @@ async def _stream_execution_worker(
                         parse_mode=ParseMode.HTML,
                         reply_markup=build_processing_keyboard(),
                     )
+                    await telegram_circuit.record_success()
                     last_edit_time = time.monotonic()
                 except RetryAfter as e:
-                    await asyncio.sleep(e.retry_after)
+                    await telegram_circuit.record_failure(retry_after=float(e.retry_after))
+                    await asyncio.sleep(e.retry_after + 0.5)
                 except BadRequest as e:
                     if "message is not modified" not in str(e).lower():
                         try:
                             plain = HTMLTagBalancer.strip_html_tags(chunks[0])
-                            await bot.edit_message_text(
-                                chat_id=chat_id,
-                                message_id=status_msg_id,
-                                text=plain[:3800],
-                                reply_markup=build_processing_keyboard(),
-                            )
+                            if await telegram_circuit.can_execute():
+                                await rate_limiter.acquire(chat_id)
+                                await bot.edit_message_text(
+                                    chat_id=chat_id,
+                                    message_id=status_msg_id,
+                                    text=plain[:3800],
+                                    reply_markup=build_processing_keyboard(),
+                                )
+                                await telegram_circuit.record_success()
+                        except RetryAfter as re:
+                            await telegram_circuit.record_failure(retry_after=float(re.retry_after))
                         except Exception:
-                            pass
+                            await telegram_circuit.record_failure()
+                    else:
+                        await telegram_circuit.record_success()
                 except Exception as e:
+                    await telegram_circuit.record_failure()
                     log.debug(f"Streaming edit error: {e}")
 
     try:
@@ -390,5 +413,12 @@ async def _stream_execution_worker(
         stop_heartbeat.set()
         if not heartbeat_task.done():
             heartbeat_task.cancel()
+        # Opt4: ensure zombie opencode proc is killed (tree)
+        proc = session_manager.active_procs.get(chat_id)
+        if proc is not None and getattr(proc, "returncode", None) is None:
+            try:
+                await process_supervisor.kill_process_tree(proc, timeout=2.0)
+            except Exception as e:
+                log.debug(f"Zombie kill skip: {e}")
         session_manager.active_procs.pop(chat_id, None)
         session_manager.active_tasks.pop(chat_id, None)

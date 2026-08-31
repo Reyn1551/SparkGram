@@ -71,3 +71,7 @@ class CircuitBreaker:
             if self.state == CircuitState.HALF_OPEN:
                 return True
             return False
+
+
+# Global circuit breaker singleton for Telegram gateway
+telegram_circuit = CircuitBreaker(failure_threshold=5, recovery_time_sec=15.0, name="TelegramGateway")
