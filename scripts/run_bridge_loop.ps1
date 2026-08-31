@@ -131,9 +131,10 @@ while ($true) {
         $exitCode = 1
     }
     $restartCount++
-    if ($restartCount -le 3) { $sleepSec = 5 }
-    elseif ($restartCount -le 6) { $sleepSec = 15 }
-    else { $sleepSec = [Math]::Min(5 * [Math]::Pow(2, $restartCount - 6), $maxBackoff) }
+    # STABIL: capped 5s flat (dulu 5→60s bikin mati 60 detik) — env MAX_BACKOFF override jika perlu
+    if ($env:MAX_BACKOFF) { $maxBackoff = [int]$env:MAX_BACKOFF }
+    $sleepSec = 5
+    if ($restartCount -gt 10) { $sleepSec = $maxBackoff }
     $stopSignal = Join-Path $LogDir "STOP"
     if (Test-Path $stopSignal) {
         Add-Content -Path $LogFile -Value "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] STOP signal detected -- tidak restart lagi"

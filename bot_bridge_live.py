@@ -48,6 +48,14 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "")
 PORT = int(os.getenv("PORT", "8000"))
 TIMEOUT_SECONDS = int(os.getenv("TIMEOUT_SECONDS", "300"))
+ENABLE_AUTO_RESTART = os.getenv("ENABLE_AUTO_RESTART", "1").strip() != "0"
+# Feature flags — matikan instant tanpa edit code jika fitur bikin bug
+FEATURE_WORKDIR = os.getenv("FEATURE_WORKDIR", "1").strip() != "0"
+FEATURE_SESSIONS = os.getenv("FEATURE_SESSIONS", "1").strip() != "0"
+FEATURE_CLEANUP = os.getenv("FEATURE_CLEANUP", "1").strip() != "0"
+FEATURE_VOICE = os.getenv("FEATURE_VOICE", "1").strip() != "0"
+FEATURE_DOC = os.getenv("FEATURE_DOC", "1").strip() != "0"
+FEATURE_QUEUE = os.getenv("FEATURE_QUEUE", "1").strip() != "0"
 # Runtime model override per-process (via /model set)
 RUNTIME_MODEL = MODEL
 FALLBACK_MODEL = __import__("os").getenv("FALLBACK_MODEL", "groq/llama-3.3-70b-versatile")
@@ -60,9 +68,10 @@ RUNTIME_WORK_DIR = WORK_DIR  # mutable via /workdir
 
 def _active_key(chat_id: int) -> str:
     try:
-        norm = str(Path(RUNTIME_WORK_DIR).resolve()).lower()
+        # cross-platform: Windows lowers, Linux keeps case; resolve handles /app vs C:\\ vs symlink
+        norm = str(Path(RUNTIME_WORK_DIR).resolve()).lower() if __import__("os").name=="nt" else str(Path(RUNTIME_WORK_DIR).resolve())
     except Exception:
-        norm = str(RUNTIME_WORK_DIR).lower()
+        norm = str(RUNTIME_WORK_DIR).lower() if __import__("os").name=="nt" else str(RUNTIME_WORK_DIR)
     return f"{chat_id}|{norm}"
 
 def _load_state() -> dict:
@@ -1057,6 +1066,10 @@ async def cancel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def self_watch():
     """Watch mtime + .restart flag dengan debounce 4s — cegah restart beruntun saat batch-edit."""
+    if not ENABLE_AUTO_RESTART:
+        log.info("Self-watch DISABLED (ENABLE_AUTO_RESTART=0) — pakai /restart manual")
+        while True:
+            await asyncio.sleep(3600)
     global _SELF_MTIME
     log.info(f"Self-watch aktif: {_SELF_PATH} mtime={_SELF_MTIME} flag={_RESTART_FLAG}")
     pending_change = None
@@ -1437,18 +1450,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not prompt or prompt.startswith("/"):
         return
     chat_id = update.effective_chat.id
-    # rate limit
-    now = time.time()
-    last = _LAST_MSG_TIME.get(chat_id, 0)
-    if now - last < _RATE_LIMIT_SEC:
-        await update.message.reply_text(f"⏳ Tunggu {(_RATE_LIMIT_SEC - (now-last)):.1f}s — rate limit anti-spam.", parse_mode=ParseMode.HTML)
-        return
-    _LAST_MSG_TIME[chat_id] = now
-    # queue: if job active, enqueue one
-    if chat_id in _ACTIVE_JOBS and not _ACTIVE_JOBS[chat_id].done():
-        _QUEUE[chat_id] = prompt
-        await update.message.reply_text("📥 Job masih jalan — prompt di-queue (1). Akan dijalankan setelah selesai. /cancel untuk batal.", parse_mode=ParseMode.HTML)
-        return
+    if FEATURE_QUEUE:
+        # rate limit
+        now = time.time()
+        last = _LAST_MSG_TIME.get(chat_id, 0)
+        if now - last < _RATE_LIMIT_SEC:
+            await update.message.reply_text(f"⏳ Tunggu {(_RATE_LIMIT_SEC - (now-last)):.1f}s — rate limit anti-spam.", parse_mode=ParseMode.HTML)
+            return
+        _LAST_MSG_TIME[chat_id] = now
+        # queue: if job active, enqueue one
+        if chat_id in _ACTIVE_JOBS and not _ACTIVE_JOBS[chat_id].done():
+            _QUEUE[chat_id] = prompt
+            await update.message.reply_text("📥 Job masih jalan — prompt di-queue (1). Akan dijalankan setelah selesai. /cancel untuk batal.", parse_mode=ParseMode.HTML)
+            return
     # Session continuity: ambil active session untuk RUNTIME_WORK_DIR ini
     active_sid = get_active_session(chat_id)
     short_model = RUNTIME_MODEL.split("/")[-1]
@@ -1731,20 +1745,28 @@ def main():
         asyncio.set_event_loop(asyncio.new_event_loop())
 
     async def _post_init(application: Application):
-        # Self-watch auto-restart setelah edit bridge (PnP)
         asyncio.create_task(self_watch())
-        log.info("Self-watch task started")
+        log.info(f"Self-watch task started (ENABLE_AUTO_RESTART={ENABLE_AUTO_RESTART})")
+        # graceful shutdown log
+        try:
+            import signal
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                try: asyncio.get_running_loop().add_signal_handler(sig, lambda: log.info(f"Signal {sig} received"))
+                except: pass
+        except: pass
 
     app = Application.builder().token(BOT_TOKEN).post_init(_post_init).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("model", model_cmd))
     app.add_handler(CommandHandler("id", id_cmd))
     app.add_handler(CommandHandler("pwd", pwd_cmd))
-    app.add_handler(CommandHandler("workdir", workdir_cmd))
+    if FEATURE_WORKDIR:
+        app.add_handler(CommandHandler("workdir", workdir_cmd))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("restart", restart_cmd))
-    app.add_handler(CommandHandler("sessions", sessions_cmd))
-    app.add_handler(CommandHandler("switch", switch_cmd))
+    if FEATURE_SESSIONS:
+        app.add_handler(CommandHandler("sessions", sessions_cmd))
+        app.add_handler(CommandHandler("switch", switch_cmd))
     app.add_handler(CommandHandler("new", new_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("rename", rename_cmd))
@@ -1755,15 +1777,18 @@ def main():
     app.add_handler(CommandHandler("health", health_cmd))
     app.add_handler(CommandHandler("logs", logs_cmd))
     app.add_handler(CommandHandler("allow", allow_cmd))
-    app.add_handler(CommandHandler("cleanup", cleanup_cmd))
-    app.add_handler(CommandHandler("archive", archive_cmd))
+    if FEATURE_CLEANUP:
+        app.add_handler(CommandHandler("cleanup", cleanup_cmd))
+        app.add_handler(CommandHandler("archive", archive_cmd))
     app.add_handler(CommandHandler("cancel", cancel_cmd))
     app.add_handler(CallbackQueryHandler(cleanup_callback, pattern=r"^clean:"))
     app.add_handler(CallbackQueryHandler(switch_callback, pattern=r"^sw:"))
-    # PnP: vision & files — IMAGE sebelum generic
-    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    # PnP: vision & files — feature-flagged
+    if FEATURE_VOICE:
+        app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
     app.add_handler(MessageHandler(filters.PHOTO | filters.Document.IMAGE, handle_image))
-    app.add_handler(MessageHandler(filters.Document.ALL & ~filters.Document.IMAGE, handle_document))
+    if FEATURE_DOC:
+        app.add_handler(MessageHandler(filters.Document.ALL & ~filters.Document.IMAGE, handle_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     if WEBHOOK_URL:
