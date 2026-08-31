@@ -103,9 +103,8 @@ def md_to_telegram_html(md: str, enable_expandable_blockquotes: bool = True) -> 
         data_rows = [split_row(l) for l in lines[2:]]
         if not data_rows:
             return block
-        # Build card: single expandable blockquote with vertical rows (no column alignment)
+        # Build card: single expandable blockquote with vertical rows (no column alignment, no header count)
         card_lines: List[str] = []
-        card_lines.append(f"📊 <b>Tabel — {len(data_rows)} baris × {len(headers)} kolom</b>")
         for idx, row in enumerate(data_rows, start=1):
             # Pad row to headers len
             while len(row) < len(headers):
