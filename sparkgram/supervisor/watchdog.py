@@ -89,29 +89,49 @@ class FileWatchdog:
 
     def _collect_mtimes(self) -> dict:
         mtimes: dict[str, float] = {}
-        # Use rglob for each pattern, but filter ignored aggressively
+        # Opt1: if watch_dir is project root, only scan sparkgram/ + root config (not WORK_DIR blob)
+        scan_dirs = []
+        try:
+            if self.watch_dir == settings.root_dir:
+                # Prefer sparkgram package only (95% of code) + root .env files
+                scan_dirs = [settings.root_dir / "sparkgram"]
+            else:
+                scan_dirs = [self.watch_dir]
+        except Exception:
+            scan_dirs = [self.watch_dir]
         patterns = ("*.py", "*.json", ".env", "*.env")
         seen: set[str] = set()
-        for pat in patterns:
-            try:
-                for p in self.watch_dir.rglob(pat):
-                    if p.is_dir():
-                        continue
-                    if self._is_ignored(p):
-                        continue
-                    # Only keep watched extensions / .env
-                    if p.suffix not in (".py", ".json") and p.name != ".env" and not p.name.endswith(".env"):
-                        continue
-                    key = str(p.resolve())
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    try:
-                        mtimes[key] = p.stat().st_mtime
-                    except Exception:
-                        pass
-            except Exception:
+        for base in scan_dirs:
+            if not base.exists():
                 continue
+            for pat in patterns:
+                try:
+                    for p in base.rglob(pat):
+                        if p.is_dir():
+                            continue
+                        if self._is_ignored(p):
+                            continue
+                        if p.suffix not in (".py", ".json") and p.name != ".env" and not p.name.endswith(".env"):
+                            continue
+                        key = str(p.resolve())
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        try:
+                            mtimes[key] = p.stat().st_mtime
+                        except Exception:
+                            pass
+                except Exception:
+                    continue
+        # Always include root .env / .env.example mtime (cheap, not via rglob)
+        for extra in [settings.root_dir / ".env", settings.root_dir / "pyproject.toml"]:
+            try:
+                if extra.exists() and not self._is_ignored(extra):
+                    key = str(extra.resolve())
+                    if key not in seen:
+                        mtimes[key] = extra.stat().st_mtime
+            except Exception:
+                pass
         return mtimes
 
     def _trigger_graceful_restart(self, reason: str) -> None:
@@ -138,10 +158,10 @@ class FileWatchdog:
 
     async def watch_loop(self) -> None:
         """Background loop checking for file changes or restart flag."""
-        log.info(f"Watchdog armed: dir={self.watch_dir}, debounce={self.debounce_sec}s, auto_restart={settings.enable_auto_restart}")
+        log.info(f"Watchdog armed: dir={self.watch_dir}, debounce={self.debounce_sec}s, auto_restart={settings.enable_auto_restart}, interval=3s")
         try:
             while True:
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(3.0)
 
                 # 1. Check restart flag (highest priority)
                 if self.restart_flag.exists():

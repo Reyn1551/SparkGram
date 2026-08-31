@@ -1,9 +1,11 @@
 """
 Main Entry Point and Runner for SparkGram.
+Includes log rotation (3MB x 3), sensitive token redaction, and graceful watchdog supervisor.
 """
 import sys
 import asyncio
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from .config import settings
@@ -11,15 +13,38 @@ from .bot.app import create_bot_application
 from .supervisor.watchdog import FileWatchdog
 from .utils.log_masker import mask_sensitive_text
 
-# Configure structured logging
-logging.basicConfig(
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    level=logging.INFO,
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(settings.log_file, encoding="utf-8"),
-    ]
+
+class SensitiveFilter(logging.Filter):
+    """Masks bot tokens and API keys in all outgoing log records."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = mask_sensitive_text(record.msg)
+        if record.args and isinstance(record.args, tuple):
+            record.args = tuple(mask_sensitive_text(str(a)) if isinstance(a, str) else a for a in record.args)
+        return True
+
+
+# Configure structured logging with RotatingFileHandler
+log_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+sensitive_filter = SensitiveFilter()
+
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setFormatter(log_formatter)
+console_handler.addFilter(sensitive_filter)
+
+file_handler = RotatingFileHandler(
+    settings.log_file,
+    maxBytes=3 * 1024 * 1024,  # 3 MB per log file
+    backupCount=3,             # Keep 3 backups (max 12 MB total)
+    encoding="utf-8",
 )
+file_handler.setFormatter(log_formatter)
+file_handler.addFilter(sensitive_filter)
+
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+root_logger.handlers = [console_handler, file_handler]
+
 log = logging.getLogger("sparkgram")
 
 

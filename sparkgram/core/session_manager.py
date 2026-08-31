@@ -58,6 +58,14 @@ class SessionManager:
 
     def save_state(self) -> None:
         """Atomically saves state to disk."""
+        # Prune older entries if dictionary exceeds 50 chats
+        if len(self.active_sessions) > 50:
+            keys_to_keep = list(self.active_sessions.keys())[-50:]
+            self.active_sessions = {k: self.active_sessions[k] for k in keys_to_keep}
+        if len(self.chat_workdirs) > 50:
+            keys_to_keep = list(self.chat_workdirs.keys())[-50:]
+            self.chat_workdirs = {k: self.chat_workdirs[k] for k in keys_to_keep}
+
         data = {
             "active_sessions": {str(k): v for k, v in self.active_sessions.items()},
             "chat_workdirs": {str(k): v for k, v in self.chat_workdirs.items()},
@@ -96,7 +104,10 @@ class SessionManager:
         target_dir = work_dir or settings.runtime_work_dir
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
             raw = stdout.decode("utf-8", errors="replace").strip()
@@ -127,7 +138,10 @@ class SessionManager:
         cmd = ["opencode", "session", "rename", session_id, new_title]
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
             if proc.returncode == 0:
@@ -141,7 +155,10 @@ class SessionManager:
         cmd = ["opencode", "session", "delete", session_id]
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
             if proc.returncode == 0:
@@ -162,7 +179,10 @@ class SessionManager:
             cmd.append(message_id)
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
             out_str = stdout.decode("utf-8", errors="replace").strip()
@@ -177,7 +197,10 @@ class SessionManager:
         cmd = ["opencode", "export", session_id]
         try:
             proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                *cmd,
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=20)
             if proc.returncode != 0:
