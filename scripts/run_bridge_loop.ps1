@@ -61,7 +61,7 @@ function Kill-StaleBridges {
 Kill-StaleBridges
 
 $restartCount = 0
-$maxBackoff = 60
+$maxBackoff = 5
 while ($true) {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $msg = "[$timestamp] Starting bridge (attempt #$($restartCount+1)) -- $PythonExe $ScriptFile"

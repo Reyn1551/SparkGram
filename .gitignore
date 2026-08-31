@@ -13,3 +13,4 @@ chunk_*.html
 _opencode_output.txt
 .DS_Store
 Thumbs.db
+.bridge_state.json
