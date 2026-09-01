@@ -21,6 +21,7 @@ from ...formatters.markdown_html import split_markdown_into_html_chunks, md_to_t
 from ...formatters.html_balancer import HTMLTagBalancer
 from ...adapters.opencode_adapter import OpenCodeAdapter
 from ...engine.process_tree import process_supervisor
+from ...memory.manager import memory_manager
 from ...ratelimit.token_bucket import rate_limiter
 from ...ratelimit.circuit_breaker import telegram_circuit
 from ..middlewares import is_allowed
@@ -81,6 +82,64 @@ def build_processing_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
+async def execute_prompt_task(
+    bot,
+    chat_id: int,
+    prompt: str,
+    message_to_reply=None,
+    files: Optional[List[str]] = None,
+) -> bool:
+    """Dispatches prompt execution to streaming worker with active task tracking."""
+    if chat_id in session_manager.active_tasks and not session_manager.active_tasks[chat_id].done():
+        warning_text = (
+            "⚠️ <b>Ada proses coding yang sedang berjalan di chat ini.</b>\n"
+            "Gunakan <code>/cancel</code> atau tap tombol Batalkan jika ingin menghentikannya."
+        )
+        if message_to_reply:
+            await message_to_reply.reply_text(warning_text, parse_mode=ParseMode.HTML)
+        else:
+            await bot.send_message(chat_id=chat_id, text=warning_text, parse_mode=ParseMode.HTML)
+        return False
+
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    session_id = session_manager.get_active_session(chat_id)
+    model = settings.runtime_model
+    model_short = get_short_model_name(model)
+
+    initial_header = (
+        f"⚡ <b>Sedang Menghubungkan ke OpenCode Engine...</b> • <code>{html.escape(model_short)}</code>\n"
+        f"<i>Koneksi ke local runtime aktif...</i>"
+    )
+    if message_to_reply:
+        status_msg = await message_to_reply.reply_text(
+            initial_header,
+            parse_mode=ParseMode.HTML,
+            reply_markup=build_processing_keyboard(),
+        )
+    else:
+        status_msg = await bot.send_message(
+            chat_id=chat_id,
+            text=initial_header,
+            parse_mode=ParseMode.HTML,
+            reply_markup=build_processing_keyboard(),
+        )
+
+    task = asyncio.create_task(
+        _stream_execution_worker(
+            bot=bot,
+            chat_id=chat_id,
+            status_msg_id=status_msg.message_id,
+            prompt=prompt,
+            work_dir=work_dir,
+            session_id=session_id,
+            model=model,
+            files=files,
+        )
+    )
+    session_manager.active_tasks[chat_id] = task
+    return True
+
+
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Processes incoming text prompts and streams results to Telegram."""
     if not is_allowed(update):
@@ -97,41 +156,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not prompt:
         return
 
-    # Check if a task is already active for this chat
-    if chat_id in session_manager.active_tasks and not session_manager.active_tasks[chat_id].done():
-        await msg.reply_text(
-            "⚠️ <b>Ada proses coding yang sedang berjalan di chat ini.</b>\n"
-            "Gunakan <code>/cancel</code> atau tap tombol Batalkan jika ingin menghentikannya.",
-            parse_mode=ParseMode.HTML,
-        )
-        return
-
-    work_dir = session_manager.get_chat_workdir(chat_id)
-    session_id = session_manager.get_active_session(chat_id)
-    model = settings.runtime_model
-    model_short = get_short_model_name(model)
-
-    # Initial status message with cancel button
-    initial_header = (
-        f"⚡ <b>Sedang Menghubungkan ke OpenCode Engine...</b> • <code>{html.escape(model_short)}</code>\n"
-        f"<i>Koneksi ke local runtime aktif...</i>"
+    await execute_prompt_task(
+        bot=context.bot,
+        chat_id=chat_id,
+        prompt=prompt,
+        message_to_reply=msg,
+        files=None,
     )
-    status_msg = await msg.reply_text(initial_header, parse_mode=ParseMode.HTML, reply_markup=build_processing_keyboard())
-
-    # Launch streaming execution worker as an asyncio Task
-    task = asyncio.create_task(
-        _stream_execution_worker(
-            bot=context.bot,
-            chat_id=chat_id,
-            status_msg_id=status_msg.message_id,
-            prompt=prompt,
-            work_dir=work_dir,
-            session_id=session_id,
-            model=model,
-            files=None,
-        )
-    )
-    session_manager.active_tasks[chat_id] = task
 
 
 async def _stream_execution_worker(
@@ -267,9 +298,19 @@ async def _stream_execution_worker(
                     await telegram_circuit.record_failure()
                     log.debug(f"Streaming edit error: {e}")
 
+    # Fase1: inject recent memory (Hermes parity, max 800 chars) into prompt
+    enriched_prompt = prompt
+    try:
+        recent = memory_manager.recent(days=3, limit=5)
+        if recent:
+            mem_ctx = "\n".join(recent)[:800]
+            enriched_prompt = f"[MEMORY CONTEXT — recent facts]\n{mem_ctx}\n\n[USER PROMPT]\n{prompt}"
+    except Exception as e:
+        log.debug(f"memory inject skip: {e}")
+
     try:
         result = await OpenCodeAdapter.run_prompt_streaming(
-            prompt=prompt,
+            prompt=enriched_prompt,
             work_dir=work_dir,
             model=model,
             session_id=session_id,
@@ -420,5 +461,14 @@ async def _stream_execution_worker(
                 await process_supervisor.kill_process_tree(proc, timeout=2.0)
             except Exception as e:
                 log.debug(f"Zombie kill skip: {e}")
+        # Fase1: persist memory (auto, inspectable markdown)
+        try:
+            if 'result' in locals() and result and result.success:
+                summary = f"{prompt[:120]} -> {str(result.output or '')[:180]}"
+                memory_manager.add(summary, chat_id=chat_id, tag="task_success")
+            elif 'result' in locals() and result and not result.success:
+                memory_manager.add(f"{prompt[:120]} -> ERROR: {str(result.error or '')[:150]}", chat_id=chat_id, tag="task_error")
+        except Exception as e:
+            log.debug(f"memory persist skip: {e}")
         session_manager.active_procs.pop(chat_id, None)
         session_manager.active_tasks.pop(chat_id, None)

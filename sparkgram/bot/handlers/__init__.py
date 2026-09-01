@@ -8,6 +8,7 @@ from .commands import (
     switch_cmd,
     new_cmd,
     status_cmd,
+    memory_cmd,
     health_cmd,
     sysinfo_cmd,
     logs_cmd,
@@ -16,10 +17,25 @@ from .commands import (
     export_cmd,
     cancel_cmd,
     restart_cmd,
+    git_cmd,
+    diff_cmd,
+    commit_cmd,
+    push_cmd,
+    macro_cmd,
+    review_cmd,
+    testgen_cmd,
+    explain_cmd,
+    refactor_cmd,
+    files_cmd,
+    cat_cmd,
+    download_cmd,
+    preview_cmd,
+    ports_cmd,
+    killport_cmd,
 )
 from .callbacks import callback_query_handler
 from .messages import message_handler
-from .media import voice_handler, photo_handler
+from .media import voice_handler, photo_handler, document_handler
 
 __all__ = [
     "start_cmd",
@@ -31,6 +47,7 @@ __all__ = [
     "switch_cmd",
     "new_cmd",
     "status_cmd",
+    "memory_cmd",
     "health_cmd",
     "sysinfo_cmd",
     "logs_cmd",
@@ -39,8 +56,26 @@ __all__ = [
     "export_cmd",
     "cancel_cmd",
     "restart_cmd",
+    "git_cmd",
+    "diff_cmd",
+    "commit_cmd",
+    "push_cmd",
+    "macro_cmd",
+    "review_cmd",
+    "testgen_cmd",
+    "explain_cmd",
+    "refactor_cmd",
+    "files_cmd",
+    "cat_cmd",
+    "download_cmd",
+    "preview_cmd",
+    "ports_cmd",
+    "killport_cmd",
     "callback_query_handler",
     "message_handler",
     "voice_handler",
     "photo_handler",
+    "document_handler",
 ]
+
+

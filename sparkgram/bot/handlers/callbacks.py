@@ -238,4 +238,387 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
                     pass
             return
 
+    # 5. Git Cockpit Callbacks (git:...)
+    elif data.startswith("git:"):
+        from ...core.git_manager import GitManager
+        payload = data[4:].strip()
+        gm = GitManager(work_dir)
+
+        if payload == "status":
+            await query.answer("🔄 Refreshing status Git...")
+            from .commands import build_git_cockpit_ui
+            text, kb = await build_git_cockpit_ui(work_dir)
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif payload == "stage_all":
+            ok, msg = await gm.stage_all()
+            await query.answer("➕ Semua file berhasil di-stage!" if ok else f"❌ {msg}", show_alert=not ok)
+            from .commands import build_git_cockpit_ui
+            text, kb = await build_git_cockpit_ui(work_dir)
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif payload == "unstage_all":
+            ok, msg = await gm.unstage_all()
+            await query.answer("➖ Staged files dikembalikan." if ok else f"❌ {msg}", show_alert=not ok)
+            from .commands import build_git_cockpit_ui
+            text, kb = await build_git_cockpit_ui(work_dir)
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif payload in ("diff_stg", "diff_all"):
+            staged_only = (payload == "diff_stg")
+            await query.answer("🔍 Memuat diff...")
+            ok, diff_text, stats = await gm.get_diff(staged_only=staged_only)
+            if not ok or not diff_text:
+                await query.answer("Tidak ada diff untuk ditampilkan.", show_alert=True)
+                return
+
+            mode_label = "Staged" if staged_only else "All Working Tree"
+            header = (
+                f"📝 <b>Git Diff ({mode_label})</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🟢 <b>+{stats['added']}</b> Baris   🔴 <b>-{stats['deleted']}</b> Baris   📁 <b>{stats['files_count']}</b> Berkas\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+            )
+            if len(diff_text) > 3200:
+                truncated = diff_text[:3200] + "\n\n... (diff terpotong — gunakan tombol Ekspor .patch)"
+                body = f"<blockquote expandable><pre><code class=\"language-diff\">{html.escape(truncated)}</code></pre></blockquote>"
+            else:
+                body = f"<blockquote expandable><pre><code class=\"language-diff\">{html.escape(diff_text)}</code></pre></blockquote>"
+
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📥 Ekspor .patch", callback_data="git:export_patch"),
+                    InlineKeyboardButton("✨ AI Commit", callback_data="git:ai_commit"),
+                ],
+                [InlineKeyboardButton("🌿 Kembali ke Git Cockpit", callback_data="git:status")]
+            ])
+            try:
+                await query.edit_message_text(header + body, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif payload == "ai_commit":
+            status = await gm.get_status_summary()
+            if not status.get("staged"):
+                await gm.stage_all()
+                status = await gm.get_status_summary()
+
+            if not status.get("staged"):
+                await query.answer("⚠️ Tidak ada perubahan kode untuk di-commit.", show_alert=True)
+                return
+
+            commit_msg = gm.generate_ai_commit_message(status)
+            await query.answer("✨ Melakukan AI Commit...")
+            ok, res = await gm.commit(commit_msg)
+
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🚀 Push Remote Sekarang", callback_data="git:push")],
+                [InlineKeyboardButton("🌿 Kembali ke Git Cockpit", callback_data="git:status")]
+            ])
+            try:
+                await query.edit_message_text(res, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif payload == "push":
+            await query.answer("🚀 Melakukan git push...", show_alert=False)
+            ok, res = await gm.push()
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🌿 Kembali ke Git Cockpit", callback_data="git:status")]])
+            try:
+                await query.edit_message_text(res, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif payload == "export_patch":
+            import io
+            await query.answer("📥 Mengekspor patch...")
+            ok, diff_text, _ = await gm.get_diff(staged_only=False)
+            if not ok or not diff_text:
+                await query.answer("Tidak ada diff untuk diekspor.", show_alert=True)
+                return
+            patch_bytes = diff_text.encode("utf-8")
+            patch_name = f"patch_{int(time.time())}.diff"
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=io.BytesIO(patch_bytes),
+                filename=patch_name,
+                caption=f"📝 <b>Git Patch Export:</b> <code>{html.escape(patch_name)}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+            return
+
+    # 3b. Memory Callbacks (mem:...)
+    elif data.startswith("mem:"):
+        from ...memory.manager import memory_manager
+        payload = data[4:].strip()
+        if payload == "recent":
+            await query.answer("🧠 Memuat memory terbaru...")
+            recent = memory_manager.recent(days=7, limit=20)
+            stats = memory_manager.stats()
+            if not recent:
+                text = f"🧠 <b>Persistent Memory</b> — {stats['files']} file(s)\n<i>Belum ada memory.</i>"
+            else:
+                inner = "\n".join(html.escape(l) for l in recent)
+                text = f"🧠 <b>Persistent Memory</b> — {stats['files']} file(s), {stats['lines']} baris\n<blockquote expandable>\n{inner}\n</blockquote>"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔍 Search", callback_data="mem:search"), InlineKeyboardButton("🗑️ Cleanup", callback_data="mem:cleanup")]])
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+        elif payload == "search":
+            await query.answer("Ketik /memory kata_kunci untuk search")
+            await context.bot.send_message(chat_id=chat_id, text="🔍 <b>Memory Search:</b>\nKirim <code>/memory kata_kunci</code> untuk cari memory.\nContoh: <code>/memory refactor</code>", parse_mode=ParseMode.HTML)
+            return
+        elif payload == "cleanup":
+            deleted = memory_manager.cleanup(keep_days=30)
+            await query.answer(f"🗑️ {deleted} file lama dihapus" if deleted else "Tidak ada file lama", show_alert=True)
+            return
+
+    # 6. Developer Macro Callbacks (macro:...)
+    elif data.startswith("macro:"):
+        payload = data[6:].strip()
+        if payload.startswith("run:"):
+            recipe_id = payload[4:]
+            await query.answer(f"🚀 Menjalankan resep /{recipe_id}...")
+            from .commands import _dispatch_macro
+            await _dispatch_macro(update, context, recipe_id)
+            return
+
+    # 7. File Explorer Callbacks (fe:...)
+    elif data.startswith("fe:"):
+        from ...engine.file_explorer import file_explorer, state_cache
+        payload = data[3:].strip()
+        parts = payload.split(":")
+        action = parts[0]
+        token = parts[1] if len(parts) > 1 else ""
+
+        if action == "noop":
+            await query.answer()
+            return
+
+        rel_path = state_cache.get_path(token) or ""
+
+        if action == "cd":
+            await query.answer("📁 Beralih folder...")
+            text, kb = file_explorer.build_file_tree_ui(base_dir=work_dir, current_subpath=rel_path, page=0)
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif action == "rf":
+            await query.answer("🔄 Memperbarui direktori...")
+            text, kb = file_explorer.build_file_tree_ui(base_dir=work_dir, current_subpath=rel_path, page=0)
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif action == "p":
+            page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+            await query.answer()
+            text, kb = file_explorer.build_file_tree_ui(base_dir=work_dir, current_subpath=rel_path, page=page)
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif action == "vw":
+            await query.answer("📄 Membaca file...")
+            ok, content = file_explorer.read_file_preview(base_dir=work_dir, rel_path=rel_path)
+            parent_rel = str(Path(rel_path).parent).replace("\\", "/") if "/" in rel_path else "."
+            parent_token = state_cache.register_path(parent_rel)
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📥 Unduh File", callback_data=f"fe:dl:{token}")],
+                [InlineKeyboardButton("◀ Kembali ke Folder", callback_data=f"fe:cd:{parent_token}")]
+            ])
+            try:
+                await query.edit_message_text(content, parse_mode=ParseMode.HTML, reply_markup=kb if ok else None)
+            except Exception:
+                pass
+            return
+
+        elif action == "dl":
+            await query.answer("📥 Mengunduh file...")
+            try:
+                target = file_explorer.safe_resolve(work_dir, rel_path)
+                if target.is_file():
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=open(target, "rb"),
+                        filename=target.name,
+                        caption=f"📄 <code>{html.escape(target.name)}</code>",
+                        parse_mode=ParseMode.HTML,
+                    )
+            except Exception as e:
+                await query.answer(f"Gagal mengunduh: {e}", show_alert=True)
+            return
+
+        elif action == "zip":
+            await query.answer("📦 Mengompresi folder zip...")
+            ok, zip_bytes, zip_name = file_explorer.create_safe_zip(base_dir=work_dir, rel_path=rel_path)
+            if ok and zip_bytes:
+                import io
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=io.BytesIO(zip_bytes),
+                    filename=zip_name,
+                    caption=f"📦 Arsip Zip: <code>{html.escape(zip_name)}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await query.answer(f"Gagal membuat zip: {zip_name}", show_alert=True)
+            return
+
+    # 8. Visual Web UI Preview Callbacks (pw:...)
+    elif data.startswith("pw:"):
+        from ...engine.playwright_preview import playwright_preview
+        from ...engine.file_explorer import state_cache
+        import io
+        import time
+        payload = data[3:].strip()
+        parts = payload.split(":")
+        action = parts[0]
+        token = parts[1] if len(parts) > 1 else ""
+        target = state_cache.get_path(token) or token or "3000"
+        preset = parts[2] if len(parts) > 2 else "desktop"
+
+        if action in ("vw", "rf"):
+            await query.answer(f"📸 Memuat snapshot ({preset})...")
+            ok, img_bytes, meta = await playwright_preview.capture_url(
+                url_or_port=target,
+                viewport_type=preset,
+            )
+            if not ok or not img_bytes:
+                await query.answer(f"Gagal snapshot: {meta.get('error')}", show_alert=True)
+                return
+
+            url = meta.get("url", target)
+            render_time = meta.get("render_time_ms", 0)
+            status_code = meta.get("status", 200)
+            v_name = meta.get("viewport_name", preset)
+
+            caption = (
+                f"📸 <b>Web Preview:</b> <code>{html.escape(url)}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🌐 Status: <code>{status_code}</code> • ⏱️ Render: <code>{render_time}ms</code>\n"
+                f"📐 Viewport: <b>{v_name}</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            )
+
+            other_preset = "mobile" if preset == "desktop" else "desktop"
+            other_label = "📱 Mobile (390px)" if preset == "desktop" else "💻 Desktop (1440p)"
+
+            kb = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(other_label, callback_data=f"pw:vw:{token}:{other_preset}"),
+                    InlineKeyboardButton("🔄 Refresh", callback_data=f"pw:rf:{token}:{preset}"),
+                ],
+                [
+                    InlineKeyboardButton("📜 Console Logs", callback_data=f"pw:log:{token}"),
+                    InlineKeyboardButton("📥 Unduh HD", callback_data=f"pw:hd:{token}:{preset}"),
+                ],
+                [InlineKeyboardButton("🗑️ Tutup", callback_data="act:close")]
+            ])
+
+            from telegram import InputMediaPhoto
+            try:
+                await query.edit_message_media(
+                    media=InputMediaPhoto(media=io.BytesIO(img_bytes), caption=caption, parse_mode=ParseMode.HTML),
+                    reply_markup=kb,
+                )
+            except Exception:
+                await context.bot.send_photo(
+                    chat_id=chat_id,
+                    photo=io.BytesIO(img_bytes),
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=kb,
+                )
+            return
+
+        elif action == "log":
+            await query.answer("📜 Membaca log konsol browser...")
+            valid_url = f"http://localhost:{target}" if target.isdigit() else target
+            logs = playwright_preview.get_console_logs(valid_url)
+            if not logs:
+                logs_text = "✨ <i>Tidak ada pesan log/error di konsol browser.</i>"
+            else:
+                formatted = "\n".join(logs[-25:])
+                logs_text = f"📜 <b>Console Logs ({len(logs)} pesan):</b>\n<blockquote expandable><pre><code>{html.escape(formatted)}</code></pre></blockquote>"
+
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ Tutup Log", callback_data="act:close")]])
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=logs_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=kb,
+            )
+            return
+
+        elif action == "hd":
+            await query.answer("📥 Mengirim gambar resolusi HD...")
+            ok, img_bytes, meta = await playwright_preview.capture_url(
+                url_or_port=target,
+                viewport_type=preset,
+            )
+            if ok and img_bytes:
+                filename = f"preview_{preset}_{int(time.time())}.jpg"
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=io.BytesIO(img_bytes),
+                    filename=filename,
+                    caption=f"📸 <b>Snapshot HD ({preset}):</b> <code>{html.escape(meta.get('url', target))}</code>",
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await query.answer("Gagal mengambil gambar HD.", show_alert=True)
+            return
+
+    # 9. Port Management Callbacks (port:...)
+    elif data.startswith("port:"):
+        from ...engine.port_manager import port_manager
+        payload = data[5:].strip()
+
+        if payload == "list":
+            await query.answer("🔄 Refreshing ports...")
+            text, kb = port_manager.build_ports_ui()
+            try:
+                await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        elif payload.startswith("kill:"):
+            port_str = payload[5:]
+            if port_str.isdigit():
+                port_num = int(port_str)
+                ok, msg, _ = port_manager.kill_port(port_num)
+                await query.answer("🛑 Port dimatikan!" if ok else "❌ Gagal mematikan port", show_alert=True)
+                text, kb = port_manager.build_ports_ui()
+                try:
+                    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+                except Exception:
+                    pass
+            return
+
     await query.answer()

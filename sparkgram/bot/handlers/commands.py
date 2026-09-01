@@ -315,6 +315,38 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(status_text, parse_mode=ParseMode.HTML)
 
 
+async def memory_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /memory [search] — persistent memory viewer (Hermes parity)."""
+    if not is_allowed(update):
+        return
+    from ...memory.manager import memory_manager
+    args = context.args or []
+    q = " ".join(args).strip()
+    if q:
+        hits = memory_manager.search(q, limit=15)
+        if not hits:
+            text = f"🔍 <b>Memory search:</b> <code>{html.escape(q)}</code>\n<i>Tidak ada hasil.</i>"
+        else:
+            lines = [f"{h['day']} | {html.escape(h['line'][:200])}" for h in hits]
+            inner = "\n".join(lines)
+            text = f"🔍 <b>Memory search:</b> <code>{html.escape(q)}</code> — {len(hits)} hit(s)\n<blockquote expandable>\n{inner}\n</blockquote>"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🧠 Lihat Recent", callback_data="mem:recent")]])
+    else:
+        recent = memory_manager.recent(days=7, limit=20)
+        stats = memory_manager.stats()
+        if not recent:
+            text = f"🧠 <b>Persistent Memory</b> — {stats['files']} file(s), {stats['lines']} baris\n<i>Belum ada memory. Memory otomatis terisi setiap task sukses.</i>"
+        else:
+            inner = "\n".join(html.escape(l) for l in recent)
+            text = f"🧠 <b>Persistent Memory</b> — {stats['files']} file(s), {stats['lines']} baris\n<blockquote expandable>\n{inner}\n</blockquote>"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔍 Search Mode", callback_data="mem:search")],
+            [InlineKeyboardButton("🗑️ Cleanup >30d", callback_data="mem:cleanup")],
+        ])
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
 async def health_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /health command: full hardware & laptop/PC telemetry."""
     if not is_allowed(update):
