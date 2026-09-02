@@ -48,6 +48,16 @@ from .handlers import (
     preview_cmd,
     ports_cmd,
     killport_cmd,
+    schedule_cmd,
+    jobs_cmd,
+    unschedule_cmd,
+    # ULTRA unified hubs
+    nav_cmd,
+    session_hub_cmd,
+    sys_hub_cmd,
+    jobs_hub_cmd,
+    git_hub_cmd,
+    recipe_hub_cmd,
     callback_query_handler,
     message_handler,
     voice_handler,
@@ -71,51 +81,55 @@ def create_bot_application() -> Application:
     builder = ApplicationBuilder().token(settings.telegram_bot_token)
     app = builder.build()
 
-    # 1. Core & Session Command Handlers
+    # === ULTRA 8 CORE (visible in /help) ===
+    app.add_handler(CommandHandler("nav", nav_cmd))
+    app.add_handler(CommandHandler("session", session_hub_cmd))
+    app.add_handler(CommandHandler("git", git_hub_cmd))
+    app.add_handler(CommandHandler("recipe", recipe_hub_cmd))
+    app.add_handler(CommandHandler("sys", sys_hub_cmd))
+    app.add_handler(CommandHandler("jobs", jobs_hub_cmd))
+    app.add_handler(CommandHandler("model", model_cmd))
+    app.add_handler(CommandHandler("memory", memory_cmd))
+    # Essentials
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("help", start_cmd))
     app.add_handler(CommandHandler("id", id_cmd))
-    app.add_handler(CommandHandler("pwd", pwd_cmd))
-    app.add_handler(CommandHandler("health", health_cmd))
-    app.add_handler(CommandHandler("sysinfo", sysinfo_cmd))
-    app.add_handler(CommandHandler("logs", logs_cmd))
-    app.add_handler(CommandHandler("model", model_cmd))
+    app.add_handler(CommandHandler("cancel", cancel_cmd))
+    app.add_handler(CommandHandler("restart", restart_cmd))
+
+    # === DEPRECATED ALIASES (hidden, not in /help) — keep for backward compat, will be removed ===
     app.add_handler(CommandHandler("workdir", workdir_cmd))
+    app.add_handler(CommandHandler("files", files_cmd))
+    app.add_handler(CommandHandler("tree", files_cmd))
+    app.add_handler(CommandHandler("pwd", pwd_cmd))
+    app.add_handler(CommandHandler("cat", cat_cmd))
+    app.add_handler(CommandHandler("download", download_cmd))
     app.add_handler(CommandHandler("sessions", sessions_cmd))
     app.add_handler(CommandHandler("switch", switch_cmd))
     app.add_handler(CommandHandler("new", new_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
-    app.add_handler(CommandHandler("memory", memory_cmd))
+    app.add_handler(CommandHandler("health", health_cmd))
+    app.add_handler(CommandHandler("sysinfo", sysinfo_cmd))
+    app.add_handler(CommandHandler("logs", logs_cmd))
+    app.add_handler(CommandHandler("preview", preview_cmd))
+    app.add_handler(CommandHandler("snap", preview_cmd))
+    app.add_handler(CommandHandler("ports", ports_cmd))
+    app.add_handler(CommandHandler("killport", killport_cmd))
+    app.add_handler(CommandHandler("schedule", schedule_cmd))
+    app.add_handler(CommandHandler("unschedule", unschedule_cmd))
     app.add_handler(CommandHandler("rename", rename_cmd))
     app.add_handler(CommandHandler("delete", delete_cmd))
     app.add_handler(CommandHandler("export", export_cmd))
-    app.add_handler(CommandHandler("cancel", cancel_cmd))
-    app.add_handler(CommandHandler("restart", restart_cmd))
-
-    # 2. Git Cockpit Command Handlers
-    app.add_handler(CommandHandler("git", git_cmd))
+    # Git shortcuts deprecated → use /git
     app.add_handler(CommandHandler("diff", diff_cmd))
     app.add_handler(CommandHandler("commit", commit_cmd))
     app.add_handler(CommandHandler("push", push_cmd))
-
-    # 3. Developer Recipe & Macro Command Handlers
+    # Recipe shortcuts deprecated → use /recipe
     app.add_handler(CommandHandler("macro", macro_cmd))
     app.add_handler(CommandHandler("review", review_cmd))
     app.add_handler(CommandHandler("testgen", testgen_cmd))
     app.add_handler(CommandHandler("explain", explain_cmd))
     app.add_handler(CommandHandler("refactor", refactor_cmd))
-
-    # 4. File Explorer & Artifact Delivery Command Handlers
-    app.add_handler(CommandHandler("files", files_cmd))
-    app.add_handler(CommandHandler("tree", files_cmd))
-    app.add_handler(CommandHandler("cat", cat_cmd))
-    app.add_handler(CommandHandler("download", download_cmd))
-
-    # 5. Visual UI Preview & Port Manager Command Handlers
-    app.add_handler(CommandHandler("preview", preview_cmd))
-    app.add_handler(CommandHandler("snap", preview_cmd))
-    app.add_handler(CommandHandler("ports", ports_cmd))
-    app.add_handler(CommandHandler("killport", killport_cmd))
 
     # 6. Callback Query Handler (inline buttons)
     app.add_handler(CallbackQueryHandler(callback_query_handler))

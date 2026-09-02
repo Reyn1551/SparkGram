@@ -12,16 +12,18 @@ from ..config import settings
 
 log = logging.getLogger(__name__)
 
-# Files/dirs that must NEVER trigger restart (state, logs, secrets)
+# Files/dirs that must NEVER trigger restart (state, logs, secrets, runtime data)
 _IGNORE_DIRS = {
     "__pycache__", ".git", ".venv", "venv", ".pytest_cache",
     "node_modules", ".mypy_cache", ".ruff_cache", "logs", "tmp",
-    ".codebase-memory", "images", "exports",
+    ".codebase-memory", "images", "exports", "memory", "scheduler",
+    "riset", "tmp_images",
 }
 _IGNORE_FILES = {
     ".bridge_state.json",
     ".restart",
     ".restart_intent",
+    "jobs.json",
     "bridge.log",
     "child_stdout.log",
     "child_stderr.log",
@@ -30,6 +32,7 @@ _IGNORE_FILES = {
 }
 _IGNORE_JSON_NAMES = {
     ".bridge_state.json",
+    "jobs.json",
     "railway.json",
     "fly.toml",
 }

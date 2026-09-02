@@ -134,3 +134,73 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         log.error(f"Photo handler error: {e}")
         await msg.reply_text(f"❌ Gagal memproses gambar: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
+
+
+async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles uploaded documents (code, logs, config files) and saves safely to WORK_DIR."""
+    if not is_allowed(update):
+        return
+
+    msg = update.effective_message
+    if not msg or not msg.document:
+        return
+
+    doc = msg.document
+    filename = doc.file_name or "uploaded_file.txt"
+    mime = doc.mime_type or ""
+
+    # If it's an image document, route to photo_handler
+    if mime.startswith("image/"):
+        await photo_handler(update, context)
+        return
+
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    caption = (msg.caption or "").strip()
+
+    try:
+        from ...engine.file_explorer import file_explorer
+        tg_file = await context.bot.get_file(doc.file_id)
+        buf = io.BytesIO()
+        await tg_file.download_to_memory(buf)
+        file_bytes = buf.getvalue()
+
+        # Save to WORK_DIR with automated .bak backup
+        ok, res_msg = file_explorer.save_uploaded_file(
+            base_dir=work_dir,
+            filename=filename,
+            file_bytes=file_bytes,
+        )
+
+        if not ok:
+            await msg.reply_text(f"❌ {res_msg}", parse_mode=ParseMode.HTML)
+            return
+
+        if caption:
+            # User provided a prompt caption with the document -> auto-execute!
+            from .messages import execute_prompt_task
+            await msg.reply_text(
+                f"📥 {res_msg}\n\n"
+                f"⚡ <b>Mengeksekusi prompt dengan file terlampir:</b>\n<i>\"{html.escape(caption)}\"</i>",
+                parse_mode=ParseMode.HTML,
+            )
+            saved_path = str((Path(work_dir) / filename).resolve())
+            await execute_prompt_task(
+                bot=context.bot,
+                chat_id=chat_id,
+                prompt=caption,
+                message_to_reply=msg,
+                files=[saved_path],
+            )
+        else:
+            await msg.reply_text(
+                f"📥 <b>File Berhasil Diunggah!</b>\n\n"
+                f"{res_msg}\n\n"
+                f"<i>Kirim perintah prompt jika ingin menganalisis atau merefaktor file ini.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+
+    except Exception as e:
+        log.error(f"Document handler error: {e}")
+        await msg.reply_text(f"❌ Gagal memproses berkas: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
+
