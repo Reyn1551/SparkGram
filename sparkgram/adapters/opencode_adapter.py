@@ -7,6 +7,8 @@ import os
 import json
 import logging
 import asyncio
+import shutil
+from pathlib import Path
 from typing import List, Optional, Dict, Any, Callable, AsyncGenerator
 
 from ..config import settings
@@ -24,6 +26,24 @@ def clean_ansi(text: str) -> str:
     return ANSI_ESCAPE_REGEX.sub("", text)
 
 
+def get_opencode_binary() -> str:
+    """Resolves the direct opencode executable, bypassing scoop shims to prevent zombie processes."""
+    bin_path = shutil.which("opencode")
+    if bin_path:
+        shim_file = Path(bin_path).with_suffix(".shim")
+        if shim_file.exists():
+            try:
+                for line in shim_file.read_text(encoding="utf-8").splitlines():
+                    if "path =" in line:
+                        real_path = line.split("=", 1)[1].strip().strip('"')
+                        if Path(real_path).exists():
+                            return real_path
+            except Exception:
+                pass
+        return bin_path
+    return "opencode"
+
+
 class OpenCodeAdapter:
     """Interface to OpenCode CLI runner."""
 
@@ -38,7 +58,8 @@ class OpenCodeAdapter:
         files: Optional[List[str]] = None,
     ) -> List[str]:
         """Constructs opencode run arguments."""
-        cmd = ["opencode", "run", prompt, "--dir", work_dir, "--format", format_mode]
+        executable = get_opencode_binary()
+        cmd = [executable, "run", prompt, "--dir", work_dir, "--format", format_mode]
         chosen_model = model or settings.runtime_model or settings.model
         if chosen_model:
             cmd.extend(["--model", chosen_model])
