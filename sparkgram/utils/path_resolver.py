@@ -60,28 +60,34 @@ def _case_insensitive_exists(base: Path, rel_parts: List[str]) -> Optional[Path]
     return None
 
 
-def _rglob_find_last_token(desktop: Path, last_token: str, full_hint: str) -> Optional[Path]:
+def _rglob_find_last_token(desktop: Path, last_token: str, full_hint: str, max_scan: int = 2000, timeout_sec: float = 1.8) -> Optional[Path]:
     """
-    Fallback: rglob search under Desktop for folder matching last_token,
-    then verify its full path contains hint tokens.
+    Fallback: rglob search under Desktop for folder matching last_token.
+    Bounded by max_scan dirs and timeout_sec to avoid event-loop blocking.
     """
+    import time
     try:
         if not desktop.exists() or not desktop.is_dir():
             return None
         hint_tokens = [t.lower() for t in re.split(r"[\\/ ]+", full_hint) if t.strip()]
-        # Keep only meaningful tokens (>2 chars)
         hint_tokens = [t for t in hint_tokens if len(t) > 2]
         candidates = []
+        scanned = 0
+        start = time.monotonic()
         for p in desktop.rglob("*"):
+            scanned += 1
+            if scanned > max_scan or (time.monotonic() - start) > timeout_sec:
+                log.debug(f"rglob bounded stop at {scanned} dirs, timeout {timeout_sec}s")
+                break
             if not p.is_dir():
                 continue
             if p.name.lower() == last_token.lower():
                 full_low = str(p).lower()
-                # Score by how many hint tokens appear
                 score = sum(1 for tok in hint_tokens if tok in full_low)
-                # Require at least last_token + one other hint if available
                 if score >= 1:
                     candidates.append((score, len(str(p)), p))
+                    if len(candidates) >= 10:
+                        break
         if candidates:
             candidates.sort(key=lambda x: (-x[0], x[1]))
             return candidates[0][2].resolve()

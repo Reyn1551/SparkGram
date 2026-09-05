@@ -1,1 +1,7 @@
-python-telegram-bot==22.8
+python-telegram-bot>=22.3
+python-dotenv>=1.0.0
+requests>=2.31.0
+psutil>=6.0
+# Optional: uncomment if you use /preview or voice
+# playwright>=1.50  # requires `playwright install chromium`
+# groq>=0.11

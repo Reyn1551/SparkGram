@@ -69,7 +69,21 @@ log = logging.getLogger(__name__)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Global exception handler to prevent unhandled error crashes."""
+    """Global exception handler — logs and gracefully handles 409/429 Telegram errors."""
+    try:
+        from telegram.error import RetryAfter, Conflict, NetworkError
+        err = context.error
+        if isinstance(err, RetryAfter):
+            log.warning(f"Telegram 429 RetryAfter {err.retry_after}s — throttled, circuit will handle")
+            return
+        if isinstance(err, Conflict):
+            log.error(f"Telegram 409 Conflict (duplicate polling?) — {err}. Ensure only ONE polling instance runs.")
+            return
+        if isinstance(err, NetworkError):
+            log.warning(f"Telegram NetworkError — {err}")
+            return
+    except Exception:
+        pass
     log.error(f"Unhandled exception in Telegram handler: {context.error}", exc_info=context.error)
 
 

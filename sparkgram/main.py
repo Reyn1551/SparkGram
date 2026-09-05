@@ -63,12 +63,15 @@ def _acquire_singleton_lock() -> bool:
                     old_pid = int(old_pid_str)
                     # Check if old process still alive (Windows)
                     try:
-                        import psutil  # optional
+                        import psutil
                         if psutil.pid_exists(old_pid):
                             proc = psutil.Process(old_pid)
-                            if proc.is_running() and "bot_bridge" in " ".join(proc.cmdline() or []):
-                                log.warning(f"Another bridge instance running (PID {old_pid}) — refusing duplicate poll. Killing stale is manual: Stop-Process -Id {old_pid} -Force")
+                            cmdline = " ".join(proc.cmdline() or []).lower()
+                            if proc.is_running() and any(k in cmdline for k in ("sparkgram", "bot_bridge", "telegram")):
+                                log.warning(f"Another bridge instance running (PID {old_pid}, cmd={cmdline[:120]}) — refusing duplicate poll. Kill: Stop-Process -Id {old_pid} -Force")
                                 return False
+                            # process exists but not bridge -> stale lock belonging to other python, ignore
+                            log.info(f"PID {old_pid} exists but not bridge ({cmdline[:80]}) -> treating lock as stale")
                     except ImportError:
                         # Fallback: check via tasklist without psutil
                         import subprocess
@@ -115,8 +118,8 @@ def run_bot():
     
     # Setup background tasks on post_init (watchdog & cron scheduler)
     async def post_init(application):
-        # 1. Background File Watchdog
-        watchdog = FileWatchdog(watch_dir=settings.root_dir, debounce_sec=4.0)
+        # 1. Background File Watchdog — debounce 8s to avoid rapid restart loops
+        watchdog = FileWatchdog(watch_dir=settings.root_dir, debounce_sec=8.0)
         watchdog.bind_app(application)
         wd_task = asyncio.create_task(watchdog.watch_loop())
         def _wd_done_cb(t: asyncio.Task):

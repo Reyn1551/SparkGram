@@ -43,7 +43,7 @@ _WATCH_GLOBS = ("*.py", "*.json", ".env", "*.env")
 class FileWatchdog:
     """Monitors mtimes of source code files with debounce, active task safety, and graceful shutdown."""
 
-    def __init__(self, watch_dir: Path, debounce_sec: float = 4.0):
+    def __init__(self, watch_dir: Path, debounce_sec: float = 8.0):
         self.watch_dir = watch_dir.resolve()
         self.debounce_sec = debounce_sec
         self.restart_flag = settings.root_dir / ".restart"
@@ -161,10 +161,10 @@ class FileWatchdog:
 
     async def watch_loop(self) -> None:
         """Background loop checking for file changes or restart flag."""
-        log.info(f"Watchdog armed: dir={self.watch_dir}, debounce={self.debounce_sec}s, auto_restart={settings.enable_auto_restart}, interval=3s")
+        log.info(f"Watchdog armed: dir={self.watch_dir}, debounce={self.debounce_sec}s, auto_restart={settings.enable_auto_restart}, interval=5s")
         try:
             while True:
-                await asyncio.sleep(3.0)
+                await asyncio.sleep(5.0)
 
                 # 1. Check restart flag (highest priority)
                 if self.restart_flag.exists():

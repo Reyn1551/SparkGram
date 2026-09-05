@@ -47,7 +47,7 @@ def get_short_dir(path_str: str) -> str:
             return f".../{parts[-2]}/{parts[-1]}"
         return str(p)
     except Exception:
-        return str(path_str)
+        return str(path_str)[:80]
 
 
 def get_current_time_str() -> str:

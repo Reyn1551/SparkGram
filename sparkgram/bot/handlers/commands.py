@@ -1,5 +1,8 @@
 """
 Telegram Slash Command Handlers for SparkGram.
+NOTE v2 refactor: this 86KB monolith is retained for backward compat.
+Future split target: handlers/nav.py, session.py, sys.py, git.py, recipe.py, jobs.py
+All markdown rendering must use formatters.markdown_html (single source, no bot_bridge.py dup).
 """
 import os
 import sys
