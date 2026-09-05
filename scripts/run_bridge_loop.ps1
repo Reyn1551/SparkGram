@@ -2,6 +2,7 @@
 # Fixes: stream redirect (anti-hang), single-instance mutex, stale killer, watchdog, health log
 param()
 $ErrorActionPreference = "Continue"
+$env:PYTHONUNBUFFERED = "1"
 $BridgeDir = "C:\Users\Reynboo\telegram-opencode-bridge"
 $PythonExe = "C:\Users\Reynboo\AppData\Local\Python\pythoncore-3.14-64\python.exe"
 if (-not (Test-Path $PythonExe)) { $PythonExe = (Get-Command python -ErrorAction SilentlyContinue).Source }
@@ -85,26 +86,13 @@ while ($true) {
         $proc = Start-Process -FilePath $PythonExe -ArgumentList "`"$ScriptFile`"" -WorkingDirectory $BridgeDir -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
         "$($proc.Id)" | Set-Content $ChildPidFile -Force
         Add-Content -Path $LogFile -Value "[$timestamp] Child PID=$($proc.Id) started (stdout=$stdout)"
-        $watchdogTimeout = 330
-        $lastSize = 0
-        $lastChange = Get-Date
+        # Normal event-driven wait: only react if process exits or STOP file is created
         while (-not $proc.HasExited) {
             Start-Sleep -Seconds 2
-            try {
-                $sz = (Get-Item $stdout -ErrorAction SilentlyContinue).Length + (Get-Item $stderr -ErrorAction SilentlyContinue).Length
-                if ($sz -ne $lastSize) { $lastSize = $sz; $lastChange = Get-Date }
-            } catch {}
-            if (((Get-Date) - $lastChange).TotalSeconds -gt $watchdogTimeout) {
-                $tsw = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-                $warnHang = "[$tsw] WATCHDOG: child PID=$($proc.Id) hang ${watchdogTimeout}s tanpa output -- killing..."
-                Write-Host $warnHang -ForegroundColor Red
-                Add-Content -Path $LogFile -Value $warnHang
+            if (Test-Path (Join-Path $LogDir "STOP")) { 
                 try { $proc.Kill() } catch {}
-                try { cmd /c "taskkill /F /T /PID $($proc.Id)" 2>$null | Out-Null } catch {}
-                Start-Sleep -Seconds 2
-                break
+                break 
             }
-            if (Test-Path (Join-Path $LogDir "STOP")) { try { $proc.Kill() } catch {}; break }
         }
         try { $proc.WaitForExit(5000) | Out-Null } catch {}
         $exitCode = $proc.ExitCode

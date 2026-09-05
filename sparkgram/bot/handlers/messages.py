@@ -47,7 +47,7 @@ def get_short_dir(path_str: str) -> str:
             return f".../{parts[-2]}/{parts[-1]}"
         return str(p)
     except Exception:
-        return str(path_str)
+        return str(path_str)[:80]
 
 
 def get_current_time_str() -> str:
@@ -137,6 +137,7 @@ async def execute_prompt_task(
         )
     )
     session_manager.active_tasks[chat_id] = task
+    session_manager.task_start_times[chat_id] = time.monotonic()
     return True
 
 
@@ -155,6 +156,51 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     prompt = msg.text.strip()
     if not prompt:
         return
+
+    # --- Natural language WORK_DIR intent interception (anti-hallucination) ---
+    # Catches "pindah ke ...", "ganti direktori ke ...", "cd ..." before AI
+    try:
+        from ...utils.path_resolver import extract_workdir_target, resolve_workdir_path
+        target_candidate = extract_workdir_target(prompt)
+        if target_candidate:
+            current_wd = session_manager.get_chat_workdir(chat_id)
+            resolved, dbg = resolve_workdir_path(target_candidate, current_workdir=current_wd)
+            if resolved:
+                session_manager.set_chat_workdir(chat_id, str(resolved))
+                # Invalidate file explorer cache token for fresh view
+                header = (
+                    f"✅ <b>WORK_DIR diganti via chat natural language</b>\n"
+                    f"<code>{html.escape(str(resolved))}</code>\n"
+                    f"<i>Prompt:</i> <code>{html.escape(prompt[:100])}</code>"
+                )
+                await msg.reply_text(header, parse_mode=ParseMode.HTML)
+                # Show file tree preview so user instantly sees result
+                from ...engine.file_explorer import file_explorer
+                try:
+                    tree_text, tree_kb = file_explorer.build_file_tree_ui(
+                        base_dir=str(resolved), current_subpath="", page=0
+                    )
+                    await msg.reply_text(tree_text, parse_mode=ParseMode.HTML, reply_markup=tree_kb)
+                except Exception:
+                    pass
+                log.info(f"Natural workdir switch chat={chat_id} -> {resolved} via '{prompt[:60]}'")
+                return
+            else:
+                # Intent detected but path not found: give helpful error and do NOT forward to AI (avoid hallucination)
+                desktop_hint = Path.home() / "Desktop" / "RISET" / "Digitalisasi Karbon" / "HyperSpectral"
+                hint_str = ""
+                if desktop_hint.exists():
+                    hint_str = f"\n\n💡 <b>Saran:</b> <code>/workdir {html.escape(str(desktop_hint))}</code>\natau <code>/workdir desktop/riset/digitalisasi karbon/hyperspectral</code>"
+                await msg.reply_text(
+                    f"❌ <b>Gagal pindah direktori</b>\nTarget: <code>{html.escape(target_candidate)}</code>\n"
+                    f"<i>{html.escape((dbg or '')[:400])}</i>{hint_str}\n\n"
+                    f"Coba: <code>/workdir C:\\Path\\Lengkap</code> atau <code>/files</code> untuk jelajahi.",
+                    parse_mode=ParseMode.HTML,
+                )
+                log.warning(f"Natural workdir miss chat={chat_id} target={target_candidate!r} dbg={dbg}")
+                return
+    except Exception as e:
+        log.debug(f"workdir intercept error: {e}")
 
     await execute_prompt_task(
         bot=context.bot,
@@ -472,3 +518,4 @@ async def _stream_execution_worker(
             log.debug(f"memory persist skip: {e}")
         session_manager.active_procs.pop(chat_id, None)
         session_manager.active_tasks.pop(chat_id, None)
+        session_manager.task_start_times.pop(chat_id, None)

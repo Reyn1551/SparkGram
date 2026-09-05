@@ -8,10 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends tini curl procp
 RUN useradd -m sparkgram
 
 COPY requirements.txt pyproject.toml ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir -e . || pip install --no-cache-dir -r requirements.txt
 
 COPY sparkgram/ ./sparkgram/
-COPY bot_bridge_live.py bot_bridge.py ./
+COPY bot_bridge_live.py ./
 COPY scripts/ ./scripts/
 COPY README.md .env.example ./
 

@@ -1,5 +1,8 @@
 """
 Telegram Slash Command Handlers for SparkGram.
+NOTE v2 refactor: this 86KB monolith is retained for backward compat.
+Future split target: handlers/nav.py, session.py, sys.py, git.py, recipe.py, jobs.py
+All markdown rendering must use formatters.markdown_html (single source, no bot_bridge.py dup).
 """
 import os
 import sys
@@ -45,37 +48,37 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     current_workdir = session_manager.get_chat_workdir(chat_id)
 
     help_text = (
-        f"✨ <b>SparkGram AI Developer Bridge</b> • <code>{html.escape(settings.runtime_model)}</code>\n\n"
+        f"✨ <b>SparkGram Ultra — 8 Core</b> • <code>{html.escape(settings.runtime_model)}</code>\n\n"
         f"WORK_DIR: <code>{html.escape(current_workdir)}</code>\n"
         f"Session aktif: {active_str}\n"
-        f"Mode: <code>{mode}</code> {'('+html.escape(settings.webhook_url)+')' if settings.webhook_url else '(dev, laptop harus nyala)'}\n\n"
+        f"Mode: <code>{mode}</code> {'('+html.escape(settings.webhook_url)+')' if settings.webhook_url else '(dev)'}\n\n"
+        f"<b>📁 NAV — File Explorer & WorkDir (cd .. mendukung)</b>\n"
+        f"<code>/nav</code> — explorer WORK_DIR (inline buttons) — File Explorer\n"
+        f"<code>/nav pwd</code> — lihat workdir\n"
+        f"<code>/nav ls [path]</code> — list folder\n"
+        f"<code>/nav cd &lt;path&gt;</code> — ganti workdir (fuzzy: <code>desktop/riset/.../hyperspectral</code>)\n"
+        f"<code>/nav cd ..</code> <code>/nav cd -</code> — mundur/maju (history)\n"
+        f"<code>/nav cat &lt;file&gt;</code> <code>/nav dl &lt;path&gt;</code>\n\n"
+        f"<b>💬 SESSION — Sesi</b>\n"
+        f"<code>/session</code> — list sesi workdir ini\n"
+        f"<code>/session switch 1</code> <code>/session new</code> <code>/session rename Judul</code> <code>/session delete id</code> <code>/session export</code>\n\n"
         f"<b>🌿 Git Cockpit:</b>\n"
-        f"/git - panel status git interaktif (staged, unstaged, branch, 1-tap push)\n"
-        f"/diff [staged] - ringkasan diff kode yang dimodifikasi\n"
-        f"/commit [pesan] - commit perubahan staged ke git\n"
-        f"/push [remote] - push branch ke remote repo\n\n"
-        f"<b>🎛️ Developer Recipes & Macros:</b>\n"
-        f"/macro - buka Recipe Hub interaktif\n"
-        f"/review - review security & logic pada git diff staged\n"
-        f"/testgen [file] - otomatis buat unit test pytest\n"
-        f"/explain [file] - analisis alur data & tracing modul\n"
-        f"/refactor [file] - clean code & optimize modul\n\n"
-        f"<b>📁 File Explorer & Artifacts:</b>\n"
-        f"/files [subpath] - jelajahi folder proyek via inline button\n"
-        f"/tree - lihat struktur file dan folder\n"
-        f"/cat [file] - baca cuplikan file kode\n"
-        f"/download [file|dir] - unduh file atau arsip .zip bersih\n\n"
-        f"<b>📸 UI Preview & Ports:</b>\n"
-        f"/preview [port|url] - foto live screenshot web di localhost\n"
-        f"/ports - lihat & matikan dev server port lokal (3000, 5173, dll)\n"
-        f"/killport [port] - bunuh proses yang menduduki port tertentu\n\n"
-        f"<b>🤖 Sesi & Model:</b>\n"
-        f"/model [list|1-7] - pilih model AI 1-tap (Spark, Groq, DeepSeek, Claude, dll)\n"
-        f"/sessions [n] [kata] - list session (tap nomor untuk switch)\n"
-        f"/switch [n|ses_xxx] - ganti session aktif\n"
-        f"/workdir [path|list] - ganti/lihat project directory\n"
-        f"/new - session baru (reset konteks)\n"
-        f"/health /status /export /logs /cancel /restart"
+        f"<code>/git</code> — panel status interaktif (staged, unstaged, branch)\n"
+        f"<code>/git diff</code> <code>/git commit</code> <code>/git push</code>\n\n"
+        f"<b>🎛️ Developer Recipes & Macro Hub:</b>\n"
+        f"<code>/recipe</code> — hub interaktif\n"
+        f"<code>/recipe review</code> <code>/recipe testgen &lt;file&gt;</code> <code>/recipe explain</code> <code>/recipe refactor</code>\n\n"
+        f"<b>🏥 SYS — System</b>\n"
+        f"<code>/sys health</code> — CPU/RAM/Disk/GPU/Baterai\n"
+        f"<code>/sys logs [n]</code> <code>/sys ports</code> <code>/sys killport 3000</code> <code>/sys preview 3000</code>\n\n"
+        f"<b>⏰ JOBS — Scheduler</b>\n"
+        f"<code>/jobs</code> — list cron\n"
+        f"<code>/jobs add 0 9 * * * prompt</code> <code>/jobs rm job_xxx</code> <code>/jobs run job_xxx</code>\n\n"
+        f"<b>🧠 MODEL & MEMORY</b>\n"
+        f"<code>/model</code> — 1-tap ganti model\n"
+        f"<code>/memory [query]</code> — search memory\n\n"
+        f"<i>Aliases lama hidden: /workdir→/nav cd, /files→/nav, /pwd→/nav pwd, /sessions→/session, /health→/sys health, /macro→/recipe, /schedule→/jobs add</i>\n"
+        f"/help /id /cancel /restart"
     )
 
     if update.message:
@@ -191,7 +194,7 @@ async def model_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def workdir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles /workdir command."""
+    """Handles /workdir command with fuzzy Desktop shorthand support."""
     if not is_allowed(update):
         return
     chat_id = update.effective_chat.id if update.effective_chat else 0
@@ -201,36 +204,706 @@ async def workdir_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         current_workdir = session_manager.get_chat_workdir(chat_id)
         active = session_manager.get_active_session(chat_id)
         active_str = f"\nSession: <code>{html.escape(active)}</code>" if active else ""
+        # Show preview of target folder contents
+        try:
+            exists = Path(current_workdir).exists()
+            preview = f"\n{'✅ Ada' if exists else '⚠️ Tidak ditemukan di disk'} • <code>{html.escape(str(Path(current_workdir).resolve()))}</code>"
+        except Exception:
+            preview = ""
         if update.message:
             await update.message.reply_text(
-                f"📁 <b>WORK_DIR Chat Ini:</b>\n<code>{html.escape(current_workdir)}</code>{active_str}\n\n"
-                f"Ganti direktori: <code>/workdir C:\\Path\\Folder</code>\n"
+                f"📁 <b>WORK_DIR Chat Ini:</b>\n<code>{html.escape(current_workdir)}</code>{active_str}{preview}\n\n"
+                f"Ganti direktori:\n<code>/workdir C:\\Path\\Folder</code>\n"
+                f"Shorthand: <code>/workdir desktop/riset/hyperspectral</code>\n"
                 f"Reset default: <code>/workdir default</code>\n"
-                f"List session per folder: <code>/workdir list</code>",
+                f"List mapping: <code>/workdir list</code>",
                 parse_mode=ParseMode.HTML,
             )
         return
 
     target = " ".join(args).strip()
-    if target.lower() == "default":
+
+    # Handle subcommands: default, list
+    low = target.lower()
+    if low == "default":
         session_manager.set_chat_workdir(chat_id, settings.work_dir)
         if update.message:
-            await update.message.reply_text(f"✅ WORK_DIR di-reset ke default: <code>{html.escape(settings.work_dir)}</code>", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(f"✅ WORK_DIR di-reset ke default:\n<code>{html.escape(settings.work_dir)}</code>", parse_mode=ParseMode.HTML)
+        return
+    if low == "list":
+        # Show all chat_workdirs mapping
+        all_wd = getattr(session_manager, "chat_workdirs", {})
+        if not all_wd:
+            text = "📁 <b>WORK_DIR Mapping:</b>\n<i>Belum ada custom workdir — semua chat pakai default.</i>\n\n<code>" + html.escape(settings.work_dir) + "</code> (default)"
+        else:
+            lines = [f"• <code>{cid}</code> → <code>{html.escape(wd)}</code>" for cid, wd in all_wd.items()]
+            body = "\n".join(lines[:20])
+            text = f"📁 <b>WORK_DIR Mapping ({len(all_wd)} chat):</b>\n{body}"
+            if len(all_wd) > 20:
+                text += f"\n<i>...dan {len(all_wd)-20} lagi</i>"
+        # Also show current chat's dir
+        cur = session_manager.get_chat_workdir(chat_id)
+        text += f"\n\n<b>Chat ini:</b> <code>{html.escape(cur)}</code>"
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML)
         return
 
-    p = Path(target)
-    if not p.exists():
+    # Try fuzzy resolver first
+    from ...utils.path_resolver import resolve_workdir_path
+    current_wd = session_manager.get_chat_workdir(chat_id)
+    resolved, dbg = resolve_workdir_path(target, current_workdir=current_wd)
+
+    if resolved is None:
+        # Fallback: try raw Path check for accurate error message, then suggest
+        p = Path(target)
+        # Provide helpful suggestions: list Desktop/RISET if target contains hyperspectral etc.
+        suggestion = ""
+        try:
+            desktop = Path.home() / "Desktop"
+            if desktop.exists():
+                # If target low contains hyperspectral, suggest correct path
+                if "hyperspectral" in low or "hyperspec" in low:
+                    correct = desktop / "RISET" / "Digitalisasi Karbon" / "HyperSpectral"
+                    if correct.exists():
+                        suggestion = f"\n\n💡 <b>Saran:</b> Mungkin maksudmu:\n<code>/workdir {html.escape(str(correct))}</code>\natau <code>/workdir desktop/riset/digitalisasi karbon/hyperspectral</code>"
+                # General: list top-level Desktop folders if miss
+                if not suggestion:
+                    top = [x.name for x in desktop.iterdir() if x.is_dir()][:6]
+                    if top:
+                        suggestion = f"\n\n💡 <b>Folder di Desktop:</b> <code>{html.escape(', '.join(top))}</code>"
+        except Exception:
+            pass
+
         if update.message:
-            await update.message.reply_text(f"❌ Path tidak ditemukan: <code>{html.escape(str(p))}</code>", parse_mode=ParseMode.HTML)
-        return
-    if not p.is_dir():
-        if update.message:
-            await update.message.reply_text(f"❌ Path bukan direktori: <code>{html.escape(str(p))}</code>", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(
+                f"❌ Path tidak ditemukan: <code>{html.escape(target)}</code>\n"
+                f"<i>Debug: {html.escape(dbg or 'no match')}</i>{suggestion}\n\n"
+                f"Gunakan absolute path atau shorthand:\n<code>/workdir desktop/riset/digitalisasi karbon/hyperspectral</code>",
+                parse_mode=ParseMode.HTML,
+            )
         return
 
-    session_manager.set_chat_workdir(chat_id, str(p.resolve()))
+    # Validate is dir (resolver already ensures is_dir, but double-check)
+    if not resolved.is_dir():
+        if update.message:
+            await update.message.reply_text(f"❌ Path bukan direktori: <code>{html.escape(str(resolved))}</code>", parse_mode=ParseMode.HTML)
+        return
+
+    # Success: persist
+    session_manager.set_chat_workdir(chat_id, str(resolved))
+    # Build success UI with file preview
+    from ...engine.file_explorer import file_explorer
+    try:
+        tree_text, tree_kb = file_explorer.build_file_tree_ui(base_dir=str(resolved), current_subpath="", page=0)
+        # tree_text already contains folder listing; we will send it as follow-up
+        header = f"✅ <b>WORK_DIR chat ini diganti ke:</b>\n<code>{html.escape(str(resolved))}</code>"
+        if update.message:
+            await update.message.reply_text(header, parse_mode=ParseMode.HTML)
+            # Show file explorer snapshot so user instantly sees hyperspectral contents
+            await update.message.reply_text(tree_text, parse_mode=ParseMode.HTML, reply_markup=tree_kb)
+        return
+    except Exception:
+        if update.message:
+            await update.message.reply_text(f"✅ WORK_DIR chat ini diganti ke:\n<code>{html.escape(str(resolved))}</code>", parse_mode=ParseMode.HTML)
+        return
+
+
+# ----------------------------------------------------------------
+# ULTRA: Unified NAV handler — menggantikan workdir+files+tree+pwd+cat+download
+# ----------------------------------------------------------------
+async def nav_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified Nav: /nav [pwd|ls|tree|cat|dl|cd <path>|..|-|<fuzzy>] — cd .. mundur, cd maju via fuzzy Desktop."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    args = context.args or []
+    raw = " ".join(args).strip()
+    from ...engine.file_explorer import file_explorer
+    from ...utils.path_resolver import resolve_workdir_path
+
+    current_wd = session_manager.get_chat_workdir(chat_id)
+
+    # Help / no args → explorer at workdir root + pwd banner
+    if not raw:
+        text, kb = file_explorer.build_file_tree_ui(base_dir=current_wd, current_subpath="", page=0)
+        header = f"📁 <b>NAV</b> • WORK_DIR: <code>{html.escape(current_wd)}</code>\n<i>Subcmd: <code>pwd</code> <code>ls [path]</code> <code>cd &lt;path&gt;</code> <code>cd ..</code> <code>cd -</code> <code>cat &lt;file&gt;</code> <code>dl &lt;path&gt;</code></i>"
+        if update.message:
+            await update.message.reply_text(header, parse_mode=ParseMode.HTML)
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    low = raw.lower()
+    # pwd / status
+    if low in ("pwd", "status", "info", "where"):
+        active = session_manager.get_active_session(chat_id)
+        active_str = f"\nSession: <code>{html.escape(active)}</code>" if active else ""
+        hist = session_manager.peek_workdir_history(chat_id)
+        hist_str = f"\nPrev: <code>{html.escape(hist)}</code> (cd -)" if hist else ""
+        if update.message:
+            await update.message.reply_text(
+                f"📁 <b>WORK_DIR:</b> <code>{html.escape(current_wd)}</code>{active_str}{hist_str}\n"
+                f"<i>Base:</i> <code>{html.escape(settings.work_dir)}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    # ls / tree / dir / list
+    if low.startswith("ls") or low.startswith("tree") or low.startswith("dir ") or low == "list":
+        # Extract subpath after command
+        sub = raw[2:].strip() if low.startswith("ls") else raw[4:].strip() if low.startswith("tree") else raw[3:].strip() if low.startswith("dir") else raw[4:].strip()
+        # Handle "ls" alone → root, "ls data" → data subfolder (temporary browse, not cd)
+        target_sub = sub.strip().lstrip("/\\")
+        text, kb = file_explorer.build_file_tree_ui(base_dir=current_wd, current_subpath=target_sub, page=0)
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    # cat / show / read
+    if low.startswith("cat ") or low.startswith("show ") or low.startswith("read "):
+        rel = raw.split(" ", 1)[1].strip().lstrip("/\\") if " " in raw else ""
+        if not rel:
+            if update.message:
+                await update.message.reply_text("Gunakan: <code>/nav cat &lt;file&gt;</code>", parse_mode=ParseMode.HTML)
+            return
+        ok, content = file_explorer.read_file_preview(base_dir=current_wd, rel_path=rel)
+        from ...engine.file_explorer import state_cache
+        token = state_cache.register_path(rel)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("📥 Unduh", callback_data=f"fe:dl:{token}")]]) if ok else None
+        if update.message:
+            await update.message.reply_text(content, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    # dl / download / get / zip
+    if low.startswith("dl ") or low.startswith("download ") or low.startswith("get ") or low.startswith("zip "):
+        rel = raw.split(" ", 1)[1].strip().lstrip("/\\") if " " in raw else ""
+        try:
+            target = file_explorer.safe_resolve(current_wd, rel)
+        except Exception as e:
+            if update.message:
+                await update.message.reply_text(f"❌ {html.escape(str(e))}", parse_mode=ParseMode.HTML)
+            return
+        if target.is_file():
+            if update.message:
+                await update.message.reply_document(document=open(target, "rb"), filename=target.name, caption=f"📄 <code>{html.escape(target.name)}</code>", parse_mode=ParseMode.HTML)
+        else:
+            ok, zip_bytes, zip_name = file_explorer.create_safe_zip(base_dir=current_wd, rel_path=rel)
+            if ok and zip_bytes:
+                import io
+                if update.message:
+                    await update.message.reply_document(document=io.BytesIO(zip_bytes), filename=zip_name, caption=f"📦 <code>{html.escape(zip_name)}</code>", parse_mode=ParseMode.HTML)
+            else:
+                if update.message:
+                    await update.message.reply_text(f"❌ Gagal zip: {html.escape(zip_name)}", parse_mode=ParseMode.HTML)
+        return
+
+    # cd handling (explicit or implicit)
+    # Normalize various cd syntaxes
+    cd_target = None
+    is_cd_explicit = False
+    if low.startswith("cd ") or low.startswith("workdir ") or low.startswith("cwd ") or low.startswith("chdir "):
+        cd_target = raw.split(" ", 1)[1].strip() if " " in raw else ""
+        is_cd_explicit = True
+    elif low in ("..", "up", "back", "../", "cd ..", "cd.."):
+        cd_target = ".."
+        is_cd_explicit = True
+    elif low == "-" or low == "cd -" or low == "back -":
+        cd_target = "-"
+        is_cd_explicit = True
+    elif low in ("~", "home", "default"):
+        cd_target = "~"
+        is_cd_explicit = True
+    else:
+        # Implicit cd: if raw looks like path, treat as cd
+        # Heuristic: contains slash, backslash, desktop, hyperspectral, drive letter, or is single folder name that resolves
+        # Avoid treating "help" as cd
+        if low not in ("help", "h", "?"):
+            cd_target = raw
+            # need to ensure we don't misinterpret "ls" etc already handled
+            is_cd_explicit = False
+
+    if cd_target is not None:
+        # Special handling for cd variants
+        if cd_target in ("..", "../", "up", "back"):
+            parent = str(Path(current_wd).parent)
+            # Ensure parent exists and is dir
+            if not Path(parent).exists() or not Path(parent).is_dir():
+                if update.message:
+                    await update.message.reply_text(f"❌ Parent tidak ditemukan: <code>{html.escape(parent)}</code>", parse_mode=ParseMode.HTML)
+                return
+            session_manager.set_chat_workdir(chat_id, parent)
+            text, kb = file_explorer.build_file_tree_ui(base_dir=parent, current_subpath="", page=0)
+            if update.message:
+                await update.message.reply_text(f"⬆️ <b>cd ..</b> → <code>{html.escape(parent)}</code>", parse_mode=ParseMode.HTML)
+                await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            return
+        if cd_target == "-" or cd_target == "cd -":
+            prev = session_manager.pop_workdir_history(chat_id)
+            if not prev or not Path(prev).exists():
+                if update.message:
+                    await update.message.reply_text("❌ Tidak ada prev workdir (cd -). History kosong.", parse_mode=ParseMode.HTML)
+                return
+            session_manager.set_chat_workdir(chat_id, prev)
+            text, kb = file_explorer.build_file_tree_ui(base_dir=prev, current_subpath="", page=0)
+            if update.message:
+                await update.message.reply_text(f"↩️ <b>cd -</b> → <code>{html.escape(prev)}</code>", parse_mode=ParseMode.HTML)
+                await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            return
+        if cd_target in ("~", "home", "default", "base"):
+            default_wd = settings.work_dir
+            session_manager.set_chat_workdir(chat_id, default_wd)
+            text, kb = file_explorer.build_file_tree_ui(base_dir=default_wd, current_subpath="", page=0)
+            if update.message:
+                await update.message.reply_text(f"🏠 <b>cd ~</b> → default: <code>{html.escape(default_wd)}</code>", parse_mode=ParseMode.HTML)
+                await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+            return
+        # Normal cd with fuzzy resolver
+        resolved, dbg = resolve_workdir_path(cd_target, current_workdir=current_wd)
+        # Fallback: try as relative subfolder inside current workdir (for maju)
+        if resolved is None:
+            try:
+                cand = (Path(current_wd) / cd_target).resolve()
+                if cand.exists() and cand.is_dir():
+                    resolved = cand
+                    dbg = f"cwd+{cd_target}"
+            except Exception:
+                pass
+        if resolved is None:
+            # Provide helpful error
+            if update.message:
+                await update.message.reply_text(
+                    f"❌ cd gagal: <code>{html.escape(cd_target)}</code>\n<i>{html.escape((dbg or '')[:400])}</i>\n\nCoba <code>/nav ls</code> atau <code>/nav pwd</code>", parse_mode=ParseMode.HTML
+                )
+            return
+        session_manager.set_chat_workdir(chat_id, str(resolved))
+        text, kb = file_explorer.build_file_tree_ui(base_dir=str(resolved), current_subpath="", page=0)
+        prefix = "📁 <b>cd</b> →" if is_cd_explicit else "📁 <b>WORK_DIR</b> →"
+        if update.message:
+            await update.message.reply_text(f"{prefix} <code>{html.escape(str(resolved))}</code>", parse_mode=ParseMode.HTML)
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    # Fallback: unknown subcommand → show help + explorer
     if update.message:
-        await update.message.reply_text(f"✅ WORK_DIR chat ini diganti ke:\n<code>{html.escape(str(p.resolve()))}</code>", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(
+            f"❓ <b>NAV subcommand tidak dikenal:</b> <code>{html.escape(raw)}</code>\n"
+            f"Gunakan: <code>/nav</code> <code>/nav pwd</code> <code>/nav ls [path]</code> <code>/nav cd &lt;path&gt;</code> <code>/nav cd ..</code> <code>/nav cd -</code> <code>/nav cat &lt;file&gt;</code> <code>/nav dl &lt;path&gt;</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        text, kb = file_explorer.build_file_tree_ui(base_dir=current_wd, current_subpath="", page=0)
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+# ----------------------------------------------------------------
+# ULTRA: Unified SESSION hub — menggantikan sessions+switch+new+rename+delete+export+status
+# ----------------------------------------------------------------
+async def session_hub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified SESSION: /session [ls|switch|new|rename|delete|export|status]"""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    args = context.args or []
+    sub = (args[0].lower() if args else "ls")
+    rest = args[1:] if len(args) > 1 else []
+
+    # ls / list
+    if sub in ("ls", "list", "show", ""):
+        query = " ".join(rest).strip() if rest else None
+        work_dir = session_manager.get_chat_workdir(chat_id)
+        active_id = session_manager.get_active_session(chat_id)
+        sessions = await session_manager.fetch_sessions(work_dir=work_dir, limit=30, query=query)
+        text = build_sessions_html(sessions, active_id, page=0, page_size=10)
+        kb = build_sessions_keyboard(sessions, active_id, page=0, page_size=10)
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    # switch
+    if sub in ("switch", "sw", "use"):
+        if not rest:
+            work_dir = session_manager.get_chat_workdir(chat_id)
+            sessions = await session_manager.fetch_sessions(work_dir=work_dir, limit=10)
+            kb = build_sessions_keyboard(sessions, session_manager.get_active_session(chat_id), page=0)
+            if update.message:
+                await update.message.reply_text("Pilih session untuk di-switch:", reply_markup=kb)
+            return
+        chosen = rest[0].strip()
+        work_dir = session_manager.get_chat_workdir(chat_id)
+        if chosen.isdigit():
+            idx = int(chosen)
+            sessions = await session_manager.fetch_sessions(work_dir=work_dir, limit=30)
+            if 1 <= idx <= len(sessions):
+                chosen = sessions[idx - 1].get("id", "")
+            else:
+                if update.message:
+                    await update.message.reply_text(f"❌ Nomor {idx} di luar jangkauan (1..{len(sessions)})", parse_mode=ParseMode.HTML)
+                return
+        session_manager.set_active_session(chat_id, chosen)
+        if update.message:
+            await update.message.reply_text(f"✅ Session di-switch ke: <code>{html.escape(chosen)}</code>", parse_mode=ParseMode.HTML)
+        return
+    # new
+    if sub in ("new", "create", "reset"):
+        session_manager.set_active_session(chat_id, None)
+        if update.message:
+            await update.message.reply_text("🆕 Session di-reset. Pesan berikutnya akan buat session baru.", parse_mode=ParseMode.HTML)
+        return
+    # rename
+    if sub in ("rename", "title"):
+        active = session_manager.get_active_session(chat_id)
+        if not active:
+            if update.message:
+                await update.message.reply_text("❌ Tidak ada session aktif untuk di-rename.", parse_mode=ParseMode.HTML)
+            return
+        if not rest:
+            if update.message:
+                await update.message.reply_text("Gunakan: <code>/session rename Judul Baru</code>", parse_mode=ParseMode.HTML)
+            return
+        new_title = " ".join(rest).strip()
+        ok, out = await session_manager.rename_session(active, new_title)
+        if update.message:
+            if ok:
+                await update.message.reply_text(f"✅ Session di-rename ke: <b>{html.escape(new_title)}</b>", parse_mode=ParseMode.HTML)
+            else:
+                await update.message.reply_text(f"❌ Gagal rename: {html.escape(out)}", parse_mode=ParseMode.HTML)
+        return
+    # delete / rm
+    if sub in ("delete", "del", "rm", "remove"):
+        target_id = rest[0].strip() if rest else session_manager.get_active_session(chat_id)
+        if not target_id:
+            if update.message:
+                await update.message.reply_text("Gunakan: <code>/session delete ses_xxx</code>", parse_mode=ParseMode.HTML)
+            return
+        ok, out = await session_manager.delete_session(target_id)
+        if update.message:
+            if ok:
+                await update.message.reply_text(f"🗑️ Session dihapus: <code>{html.escape(target_id)}</code>", parse_mode=ParseMode.HTML)
+            else:
+                await update.message.reply_text(f"❌ Gagal hapus: {html.escape(out)}", parse_mode=ParseMode.HTML)
+        return
+    # export
+    if sub in ("export", "save", "dump"):
+        active = session_manager.get_active_session(chat_id)
+        if not active:
+            if update.message:
+                await update.message.reply_text("❌ Tidak ada session aktif untuk di-export.", parse_mode=ParseMode.HTML)
+            return
+        ok, filepath, content = await session_manager.export_session_to_markdown(active)
+        import os as _os
+        if ok and _os.path.exists(filepath):
+            if update.message:
+                await update.message.reply_document(document=open(filepath, "rb"), caption=f"📄 Export <code>{html.escape(active)}</code>", parse_mode=ParseMode.HTML)
+        else:
+            if update.message:
+                await update.message.reply_text(f"❌ Export gagal: {html.escape(content)}", parse_mode=ParseMode.HTML)
+        return
+    # status
+    if sub in ("status", "info"):
+        work_dir = session_manager.get_chat_workdir(chat_id)
+        active = session_manager.get_active_session(chat_id)
+        active_str = f"<code>{html.escape(active)}</code>" if active else "<i>(tidak ada)</i>"
+        is_running = chat_id in session_manager.active_tasks and not session_manager.active_tasks[chat_id].done()
+        task_label = "🏃 Sibuk" if is_running else "🟢 Idle"
+        text = f"📊 <b>SESSION Status</b>\n• Task: {task_label}\n• Session: {active_str}\n• WORK_DIR: <code>{html.escape(work_dir)}</code>\n• Model: <code>{html.escape(settings.runtime_model)}</code>"
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        return
+    # unknown
+    if update.message:
+        await update.message.reply_text("Gunakan: <code>/session [ls|switch|new|rename|delete|export|status]</code>", parse_mode=ParseMode.HTML)
+
+
+# ----------------------------------------------------------------
+# ULTRA: Unified SYS hub — menggantikan health+sysinfo+logs+ports+killport+preview+status
+# ----------------------------------------------------------------
+async def sys_hub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified SYS: /sys [health|logs|ports|preview|status]"""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    args = context.args or []
+    sub = (args[0].lower() if args else "health")
+    rest = args[1:] if len(args) > 1 else []
+
+    if sub in ("health", "sysinfo", "info", ""):
+        # Call health logic inline
+        from ...utils.system_monitor import get_system_health, format_health_html, build_health_keyboard
+        active_session = session_manager.get_active_session(chat_id)
+        is_busy = chat_id in session_manager.active_tasks and not session_manager.active_tasks[chat_id].done()
+        data = get_system_health()
+        text = format_health_html(data, active_session=active_session, is_busy=is_busy)
+        kb = build_health_keyboard()
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    if sub in ("logs", "log"):
+        n = int(rest[0]) if rest and rest[0].isdigit() else 25
+        n = max(5, min(100, n))
+        from ...utils.log_masker import mask_sensitive_text
+        log_file = settings.log_file
+        if not log_file.exists():
+            if update.message:
+                await update.message.reply_text("<i>Belum ada log.</i>", parse_mode=ParseMode.HTML)
+            return
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+                tail = f.readlines()[-n:]
+            masked = mask_sensitive_text("".join(tail))
+            esc = html.escape(masked[-3500:])
+            if update.message:
+                await update.message.reply_text(f"📜 <b>Logs ({len(tail)}):</b>\n<pre><code>{esc}</code></pre>", parse_mode=ParseMode.HTML)
+        except Exception as e:
+            if update.message:
+                await update.message.reply_text(f"❌ Gagal baca log: {html.escape(str(e))}", parse_mode=ParseMode.HTML)
+        return
+    if sub in ("ports", "port", "ps"):
+        from ...engine.port_manager import port_manager
+        text, kb = port_manager.build_ports_ui()
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    if sub in ("killport", "kill"):
+        if not rest or not rest[0].isdigit():
+            if update.message:
+                await update.message.reply_text("Gunakan: <code>/sys killport 3000</code>", parse_mode=ParseMode.HTML)
+            return
+        from ...engine.port_manager import port_manager
+        port_num = int(rest[0])
+        ok, msg, _ = port_manager.kill_port(port_num)
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔌 Ports", callback_data="port:list")]])
+        if update.message:
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    if sub in ("preview", "snap", "shot", "web"):
+        # reuse preview logic
+        target = rest[0] if rest else None
+        if not target:
+            from ...engine.playwright_preview import playwright_preview
+            detected = playwright_preview.detect_active_dev_port()
+            target = str(detected) if detected else "3000"
+        if update.message:
+            wait_msg = await update.message.reply_text(f"📸 Snapshot <code>{html.escape(str(target))}</code>...", parse_mode=ParseMode.HTML)
+        else:
+            wait_msg = None
+        from ...engine.playwright_preview import playwright_preview
+        from ...engine.file_explorer import state_cache as _sc
+        ok, img_bytes, meta = await playwright_preview.capture_url(url_or_port=target, viewport_type="desktop")
+        if not ok or not img_bytes:
+            err = meta.get("error", "gagal")
+            if wait_msg:
+                await wait_msg.edit_text(f"❌ Preview gagal: {html.escape(err)}", parse_mode=ParseMode.HTML)
+            return
+        url = meta.get("url", target)
+        render_time = meta.get("render_time_ms", 0)
+        status_code = meta.get("status", 200)
+        v_name = meta.get("viewport_name", "Desktop")
+        token = _sc.register_path(str(target))
+        caption = f"📸 <b>Web Preview:</b> <code>{html.escape(url)}</code>\n🌐 {status_code} • ⏱️ {render_time}ms • 📐 {v_name}"
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📱 Mobile", callback_data=f"pw:vw:{token}:mobile"), InlineKeyboardButton("💻 Desktop", callback_data=f"pw:vw:{token}:desktop")],
+            [InlineKeyboardButton("🔄 Refresh", callback_data=f"pw:rf:{token}:desktop"), InlineKeyboardButton("📜 Logs", callback_data=f"pw:log:{token}")],
+        ])
+        import io as _io
+        if wait_msg:
+            try:
+                await wait_msg.delete()
+            except Exception:
+                pass
+        if update.message:
+            await update.message.reply_photo(photo=_io.BytesIO(img_bytes), caption=caption, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    if sub in ("status", "stat"):
+        work_dir = session_manager.get_chat_workdir(chat_id)
+        active = session_manager.get_active_session(chat_id)
+        is_running = chat_id in session_manager.active_tasks and not session_manager.active_tasks[chat_id].done()
+        task_label = "🏃 Sibuk" if is_running else "🟢 Idle"
+        from ...utils.system_monitor import get_system_health
+        data = get_system_health()
+        # compact status
+        text = (
+            f"📊 <b>SYS Status</b>\n"
+            f"• Task: {task_label}\n"
+            f"• Session: <code>{html.escape(active or '-')}</code>\n"
+            f"• WORK_DIR: <code>{html.escape(work_dir)}</code>\n"
+            f"• Model: <code>{html.escape(settings.runtime_model)}</code>\n"
+            f"• CPU: {data.get('cpu', {}).get('percent', '?')}%\n"
+            f"• RAM: {data.get('memory', {}).get('percent', '?')}%"
+        )
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        return
+    if update.message:
+        await update.message.reply_text("Gunakan: <code>/sys [health|logs|ports|killport|preview|status]</code>", parse_mode=ParseMode.HTML)
+
+
+# ----------------------------------------------------------------
+# ULTRA: Unified JOBS hub — menggantikan schedule+jobs+unschedule
+# ----------------------------------------------------------------
+async def jobs_hub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified JOBS: /jobs [ls|add|rm|run] — scheduler"""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    args = context.args or []
+    if not args:
+        # ls
+        from ...scheduler.manager import cron_scheduler
+        jobs = cron_scheduler.list_jobs(chat_id)
+        text = cron_scheduler.format_jobs_html(jobs, chat_id=chat_id)
+        kb = cron_scheduler.build_jobs_keyboard(jobs, chat_id=chat_id)
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    sub = args[0].lower()
+    rest = args[1:]
+    if sub in ("ls", "list", "show"):
+        from ...scheduler.manager import cron_scheduler
+        jobs = cron_scheduler.list_jobs(chat_id)
+        text = cron_scheduler.format_jobs_html(jobs, chat_id=chat_id)
+        kb = cron_scheduler.build_jobs_keyboard(jobs, chat_id=chat_id)
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    if sub in ("add", "create", "schedule"):
+        # Expect: cron_expr + prompt
+        if not rest:
+            if update.message:
+                await update.message.reply_text("Gunakan: <code>/jobs add 0 9 * * * prompt</code> atau <code>/jobs add @hourly prompt</code>", parse_mode=ParseMode.HTML)
+            return
+        # Reuse schedule logic: delegate to schedule_cmd by faking context
+        # Build fake context with args = rest
+        fake_ctx = type("obj", (object,), {"args": rest})()
+        await schedule_cmd(update, fake_ctx)
+        return
+    if sub in ("rm", "remove", "del", "delete", "unschedule"):
+        if not rest:
+            if update.message:
+                await update.message.reply_text("Gunakan: <code>/jobs rm job_xxx</code>", parse_mode=ParseMode.HTML)
+            return
+        job_id = rest[0].strip()
+        from ...scheduler.manager import cron_scheduler
+        ok = cron_scheduler.remove_job(job_id, chat_id=chat_id)
+        if update.message:
+            if ok:
+                await update.message.reply_text(f"🗑️ Job <code>{html.escape(job_id)}</code> dihapus.", parse_mode=ParseMode.HTML)
+            else:
+                await update.message.reply_text(f"❌ Job <code>{html.escape(job_id)}</code> tidak ditemukan.", parse_mode=ParseMode.HTML)
+        return
+    if sub in ("run", "exec"):
+        if not rest:
+            if update.message:
+                await update.message.reply_text("Gunakan: <code>/jobs run job_xxx</code>", parse_mode=ParseMode.HTML)
+            return
+        job_id = rest[0].strip()
+        from ...scheduler.manager import cron_scheduler
+        import asyncio as _asyncio
+        job = cron_scheduler.get_job(job_id)
+        if job:
+            if update.message:
+                await update.message.reply_text(f"🚀 Menjalankan <code>{html.escape(job_id)}</code>...", parse_mode=ParseMode.HTML)
+            _asyncio.create_task(cron_scheduler.execute_job(context.bot, job))
+        else:
+            if update.message:
+                await update.message.reply_text(f"❌ Job <code>{html.escape(job_id)}</code> tidak ditemukan.", parse_mode=ParseMode.HTML)
+        return
+    if update.message:
+        await update.message.reply_text("Gunakan: <code>/jobs [ls|add|rm|run]</code>", parse_mode=ParseMode.HTML)
+
+
+# ----------------------------------------------------------------
+# ULTRA: Unified GIT hub — /git [status|diff|commit|push] (hapus shortcuts)
+# ----------------------------------------------------------------
+async def git_hub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified GIT: /git [status|diff|commit|push] — wrapper ke git cockpit"""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    args = context.args or []
+    sub = (args[0].lower() if args else "status")
+    # status
+    if sub in ("status", "st", "show", ""):
+        text, kb = await build_git_cockpit_ui(work_dir)
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    if sub in ("diff", "d"):
+        staged = len(args) > 1 and args[1].lower() == "staged"
+        from ...core.git_manager import GitManager
+        gm = GitManager(work_dir)
+        ok, diff_text, stats = await gm.get_diff(staged_only=staged)
+        if not ok or not diff_text:
+            if update.message:
+                await update.message.reply_text("✨ Tidak ada diff.", parse_mode=ParseMode.HTML)
+            return
+        mode_label = "Staged" if staged else "All"
+        header = f"📝 <b>Git Diff ({mode_label})</b> +{stats['added']} -{stats['deleted']} 📁{stats['files_count']}\n"
+        body = f"<blockquote expandable><pre><code>{html.escape(diff_text[:3200])}</code></pre></blockquote>"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🌿 Git", callback_data="git:status")]])
+        if update.message:
+            await update.message.reply_text(header + body, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    if sub in ("commit", "ci"):
+        msg = " ".join(args[1:]).strip()
+        from ...core.git_manager import GitManager
+        gm = GitManager(work_dir)
+        status = await gm.get_status_summary()
+        if not status.get("staged"):
+            if update.message:
+                await update.message.reply_text("⚠️ Tidak ada staged. /git status → Stage All dulu.", parse_mode=ParseMode.HTML)
+            return
+        if not msg:
+            msg = gm.generate_ai_commit_message(status)
+        ok, res = await gm.commit(msg)
+        if update.message:
+            await update.message.reply_text(res, parse_mode=ParseMode.HTML)
+        return
+    if sub in ("push", "p"):
+        remote = args[1] if len(args) > 1 else "origin"
+        branch = args[2] if len(args) > 2 else None
+        from ...core.git_manager import GitManager
+        gm = GitManager(work_dir)
+        if update.message:
+            wait_msg = await update.message.reply_text("🚀 Push...", parse_mode=ParseMode.HTML)
+        else:
+            wait_msg = None
+        ok, res = await gm.push(remote=remote, branch=branch)
+        if wait_msg:
+            await wait_msg.edit_text(res, parse_mode=ParseMode.HTML)
+        elif update.message:
+            await update.message.reply_text(res, parse_mode=ParseMode.HTML)
+        return
+    if update.message:
+        await update.message.reply_text("Gunakan: <code>/git [status|diff|commit|push]</code>", parse_mode=ParseMode.HTML)
+
+
+# ----------------------------------------------------------------
+# ULTRA: Unified RECIPE hub — /recipe [list|review|testgen|explain|refactor]
+# ----------------------------------------------------------------
+async def recipe_hub_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Unified RECIPE: /recipe [review|testgen|explain|refactor|doc]"""
+    if not is_allowed(update):
+        return
+    args = context.args or []
+    if not args:
+        text, kb = build_macro_hub_ui()
+        # rename macro hub title to recipe for consistency
+        text = text.replace("Macro", "Recipe")
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    sub = args[0].lower()
+    target = " ".join(args[1:]).strip()
+    # map review etc.
+    if sub in ("review", "testgen", "explain", "refactor", "doc"):
+        await _dispatch_macro(update, context, sub, target=target)
+        return
+    if sub in ("list", "ls"):
+        text, kb = build_macro_hub_ui()
+        text = text.replace("Macro", "Recipe")
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    # fallback try as macro id
+    await _dispatch_macro(update, context, sub, target=target)
 
 
 async def sessions_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -301,11 +974,20 @@ async def status_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     work_dir = session_manager.get_chat_workdir(chat_id)
     active = session_manager.get_active_session(chat_id)
     active_str = f"<code>{html.escape(active)}</code>" if active else "<i>(tidak ada)</i>"
-    is_running = chat_id in session_manager.active_tasks and not session_manager.active_tasks[chat_id].done()
+    is_task_running = chat_id in session_manager.active_tasks and not session_manager.active_tasks[chat_id].done()
+    is_proc_running = chat_id in session_manager.active_procs and getattr(session_manager.active_procs[chat_id], "returncode", None) is None
+    is_running = is_task_running or is_proc_running
+
+    if is_running:
+        start_t = session_manager.task_start_times.get(chat_id, time.monotonic())
+        elapsed = time.monotonic() - start_t
+        task_label = f"🏃 <b>Sibuk</b> <i>(Memproses prompt • {elapsed:.1f}s)</i>"
+    else:
+        task_label = "🟢 <b>Idle</b>"
 
     status_text = (
         f"📊 <b>SparkGram Status</b>\n\n"
-        f"• Task berjalan: <b>{'🏃 Sibuk (Job Running)' if is_running else '🟢 Idle'}</b>\n"
+        f"• Task berjalan: {task_label}\n"
         f"• Session aktif: {active_str}\n"
         f"• Model aktif: <code>{html.escape(settings.runtime_model)}</code>\n"
         f"• WORK_DIR: <code>{html.escape(work_dir)}</code>\n"
@@ -1009,3 +1691,127 @@ async def killport_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔌 Buka Panel Ports", callback_data="port:list")]])
     if update.message:
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+# -------------------------------------------------------------
+# Cron Task Scheduler Handlers
+# -------------------------------------------------------------
+async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /schedule [cron_expr] [prompt] command."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    from ...scheduler.manager import cron_scheduler
+
+    args = context.args or []
+    if not args:
+        jobs = cron_scheduler.list_jobs(chat_id)
+        text = cron_scheduler.format_jobs_html(jobs, chat_id=chat_id)
+        kb = cron_scheduler.build_jobs_keyboard(jobs, chat_id=chat_id)
+        if update.message:
+            await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+
+    # Parse arguments:
+    # 1. Shortcut: /schedule @hourly prompt...
+    # 2. Shortcut: /schedule @every 15m prompt...
+    # 3. 5-Field Cron: /schedule 0 9 * * * prompt...
+    if args[0].lower() == "@every" and len(args) >= 3:
+        cron_expr = f"{args[0]} {args[1]}"
+        prompt = " ".join(args[2:]).strip()
+    elif args[0].startswith("@") and len(args) >= 2:
+        cron_expr = args[0]
+        prompt = " ".join(args[1:]).strip()
+    elif len(args) >= 6:
+        cron_expr = " ".join(args[:5])
+        prompt = " ".join(args[5:]).strip()
+    else:
+        err_text = (
+            "⚠️ <b>Format /schedule tidak lengkap.</b>\n\n"
+            "<b>Format yang didukung:</b>\n"
+            "• <code>/schedule 0 9 * * * Cek git status dan test</code>\n"
+            "• <code>/schedule */30 * * * * Health check server</code>\n"
+            "• <code>/schedule @hourly Cek port dan memory usage</code>\n"
+            "• <code>/schedule @daily Buat rekap commit harian</code>\n"
+            "• <code>/schedule @every 15m Ping local dev server</code>\n\n"
+            "<i>Ketik <code>/jobs</code> untuk melihat daftar tugas terjadwal.</i>"
+        )
+        if update.message:
+            await update.message.reply_text(err_text, parse_mode=ParseMode.HTML)
+        return
+
+    work_dir = session_manager.get_chat_workdir(chat_id)
+    try:
+        job = cron_scheduler.add_job(
+            chat_id=chat_id,
+            cron_expr=cron_expr,
+            prompt=prompt,
+            work_dir=work_dir,
+            model=settings.runtime_model,
+        )
+        reply_text = (
+            f"✅ <b>Jadwal Tugas Berhasil Dibuat!</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"🆔 ID: <code>{job['id']}</code>\n"
+            f"⏰ Pola Cron: <code>{html.escape(job['cron'])}</code>\n"
+            f"📝 Prompt: <i>{html.escape(job['prompt'])}</i>\n"
+            f"📁 WORK_DIR: <code>{html.escape(job['work_dir'])}</code>\n"
+            f"🤖 Model: <code>{html.escape(job['model'])}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🚀 Jalankan Sekarang", callback_data=f"job:run:{job['id']}"),
+                InlineKeyboardButton("⏸️ Jeda Jadwal", callback_data=f"job:tog:{job['id']}"),
+            ],
+            [
+                InlineKeyboardButton("📋 Kelola Semua Jadwal", callback_data="job:list"),
+                InlineKeyboardButton("🗑️ Hapus Jadwal", callback_data=f"job:del:{job['id']}"),
+            ]
+        ])
+        if update.message:
+            await update.message.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=kb)
+    except Exception as e:
+        if update.message:
+            await update.message.reply_text(f"❌ <b>Gagal membuat jadwal:</b> {html.escape(str(e))}", parse_mode=ParseMode.HTML)
+
+
+async def jobs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /jobs command to list and manage scheduled cron jobs."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    from ...scheduler.manager import cron_scheduler
+    jobs = cron_scheduler.list_jobs(chat_id)
+    text = cron_scheduler.format_jobs_html(jobs, chat_id=chat_id)
+    kb = cron_scheduler.build_jobs_keyboard(jobs, chat_id=chat_id)
+    if update.message:
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+
+
+async def unschedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /unschedule <job_id> command."""
+    if not is_allowed(update):
+        return
+    chat_id = update.effective_chat.id if update.effective_chat else 0
+    args = context.args or []
+    if not args:
+        if update.message:
+            await update.message.reply_text(
+                "⚠️ Gunakan: <code>/unschedule <job_id></code>\n"
+                "Contoh: <code>/unschedule job_1a2b3c</code>\n\n"
+                "<i>Ketik <code>/jobs</code> untuk melihat daftar ID tugas aktif.</i>",
+                parse_mode=ParseMode.HTML,
+            )
+        return
+
+    job_id = args[0].strip()
+    from ...scheduler.manager import cron_scheduler
+    ok = cron_scheduler.remove_job(job_id, chat_id=chat_id)
+    if ok:
+        if update.message:
+            await update.message.reply_text(f"🗑️ <b>Tugas terjadwal <code>{html.escape(job_id)}</code> berhasil dihapus.</b>", parse_mode=ParseMode.HTML)
+    else:
+        if update.message:
+            await update.message.reply_text(f"❌ <b>Tugas <code>{html.escape(job_id)}</code> tidak ditemukan</b> atau bukan milik chat ini.", parse_mode=ParseMode.HTML)
+

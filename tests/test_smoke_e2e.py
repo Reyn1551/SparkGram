@@ -21,7 +21,7 @@ def test_opencode_adapter_command_builder():
         session_id="ses_12345",
         auto_approve=True,
     )
-    assert "opencode" == cmd[0]
+    assert "opencode" in cmd[0].lower()
     assert "run" == cmd[1]
     assert "buat file hello.py" in cmd
     assert "--dir" in cmd

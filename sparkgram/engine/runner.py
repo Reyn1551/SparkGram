@@ -2,6 +2,7 @@
 Subprocess Execution Runner for SparkGram.
 Orchestrates process spawning, live stream consumption, and cancellation.
 """
+import os
 import sys
 import time
 import asyncio
@@ -42,7 +43,7 @@ class SubprocessRunner:
                 "env": env,
             }
             if sys.platform != "win32":
-                kwargs["preexec_fn"] = lambda: None  # Can use os.setsid on POSIX
+                kwargs["preexec_fn"] = os.setsid  # POSIX: new process group for killpg
 
             proc = await asyncio.create_subprocess_exec(*cmd, **kwargs)
             if proc.pid:

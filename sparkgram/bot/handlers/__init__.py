@@ -32,6 +32,16 @@ from .commands import (
     preview_cmd,
     ports_cmd,
     killport_cmd,
+    schedule_cmd,
+    jobs_cmd,
+    unschedule_cmd,
+    # ULTRA
+    nav_cmd,
+    session_hub_cmd,
+    sys_hub_cmd,
+    jobs_hub_cmd,
+    git_hub_cmd,
+    recipe_hub_cmd,
 )
 from .callbacks import callback_query_handler
 from .messages import message_handler
@@ -71,6 +81,15 @@ __all__ = [
     "preview_cmd",
     "ports_cmd",
     "killport_cmd",
+    "schedule_cmd",
+    "jobs_cmd",
+    "unschedule_cmd",
+    "nav_cmd",
+    "session_hub_cmd",
+    "sys_hub_cmd",
+    "jobs_hub_cmd",
+    "git_hub_cmd",
+    "recipe_hub_cmd",
     "callback_query_handler",
     "message_handler",
     "voice_handler",

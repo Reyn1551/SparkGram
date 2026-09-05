@@ -58,7 +58,9 @@ async def test_start_cmd_allowed():
     await start_cmd(update, context)
     update.message.reply_text.assert_called_once()
     call_args = update.message.reply_text.call_args[0][0]
-    assert "SparkGram AI Bridge Aktif" in call_args
+    assert "SparkGram" in call_args
+    assert "Git Cockpit" in call_args
+    assert "File Explorer" in call_args
 
 
 @pytest.mark.asyncio

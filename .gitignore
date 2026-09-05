@@ -15,3 +15,4 @@ _opencode_output.txt
 Thumbs.db
 .bridge_state.json
 /memory/
+/scheduler/

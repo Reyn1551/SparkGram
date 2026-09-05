@@ -36,9 +36,11 @@ class SessionManager:
         self.state_file = state_file or settings.state_file
         self.active_sessions: Dict[int, str] = {}
         self.chat_workdirs: Dict[int, str] = {}
+        self.chat_workdir_history: Dict[int, List[str]] = {}
         self.last_msg_times: Dict[int, float] = {}
         self.active_tasks: Dict[int, asyncio.Task] = {}
         self.active_procs: Dict[int, Any] = {}
+        self.task_start_times: Dict[int, float] = {}
         self.load_state()
 
     def load_state(self) -> None:
@@ -49,6 +51,9 @@ class SessionManager:
         
         raw_workdirs = data.get("chat_workdirs", {})
         self.chat_workdirs = {int(k): str(v) for k, v in raw_workdirs.items() if str(k).lstrip("-").isdigit()}
+
+        raw_hist = data.get("chat_workdir_history", {})
+        self.chat_workdir_history = {int(k): [str(x) for x in v if isinstance(x, str)] for k, v in raw_hist.items() if str(k).lstrip("-").isdigit() and isinstance(v, list)}
         
         # Restore runtime settings if present
         if "runtime_model" in data:
@@ -67,7 +72,23 @@ class SessionManager:
         if len(self.chat_workdirs) > cap * 2:
             keys_to_keep = list(self.chat_workdirs.keys())[-(cap * 2):]
             self.chat_workdirs = {k: self.chat_workdirs[k] for k in keys_to_keep}
-            log.info(f"Pruned chat_workdirs to {cap*2}")
+        # Cap history per chat to 20
+        for cid in list(self.chat_workdir_history.keys()):
+            if len(self.chat_workdir_history[cid]) > 20:
+                self.chat_workdir_history[cid] = self.chat_workdir_history[cid][-20:]
+        # Write state to disk
+        data = {
+            "active_sessions": {str(k): v for k, v in self.active_sessions.items()},
+            "chat_workdirs": {str(k): v for k, v in self.chat_workdirs.items()},
+            "chat_workdir_history": {str(k): v for k, v in self.chat_workdir_history.items()},
+            "runtime_model": settings.runtime_model,
+            "runtime_work_dir": settings.runtime_work_dir,
+            "updated_at": datetime.datetime.now().isoformat(),
+        }
+        try:
+            atomic_write_json(str(self.state_file), data)
+        except Exception as e:
+            log.error(f"Failed to save state: {e}")
 
     def cleanup_expired_state(self) -> None:
         """Opt4: remove stale workdir mappings whose dirs no longer exist or TTL exceeded."""
@@ -86,18 +107,6 @@ class SessionManager:
         except Exception as e:
             log.debug(f"cleanup_expired_state skip: {e}")
 
-        data = {
-            "active_sessions": {str(k): v for k, v in self.active_sessions.items()},
-            "chat_workdirs": {str(k): v for k, v in self.chat_workdirs.items()},
-            "runtime_model": settings.runtime_model,
-            "runtime_work_dir": settings.runtime_work_dir,
-            "updated_at": datetime.datetime.now().isoformat(),
-        }
-        try:
-            atomic_write_json(str(self.state_file), data)
-        except Exception as e:
-            log.error(f"Failed to save state: {e}")
-
     def get_active_session(self, chat_id: int) -> Optional[str]:
         return self.active_sessions.get(chat_id)
 
@@ -109,14 +118,55 @@ class SessionManager:
         self.save_state()
 
     def get_chat_workdir(self, chat_id: int) -> str:
-        """Returns workdir for specific chat, falling back to global runtime_work_dir."""
+        """Returns workdir for specific chat, falling back to global runtime_work_dir.
+        Also attempts lazy reload from disk if chat_id missing in memory but present in file
+        (fixes stale memory after another process wrote .bridge_state.json — e.g. duplicate poller race).
+        """
+        if chat_id not in self.chat_workdirs:
+            try:
+                data = safe_read_json(str(self.state_file))
+                raw_wd = data.get("chat_workdirs", {})
+                key = str(chat_id)
+                if key in raw_wd and raw_wd[key]:
+                    self.chat_workdirs[chat_id] = str(raw_wd[key])
+                    # Sync runtime_work_dir if file has newer global
+                    if data.get("runtime_work_dir"):
+                        # Only sync if file's updated_at is recent (> memory); simplest: sync
+                        settings.runtime_work_dir = data["runtime_work_dir"]
+            except Exception:
+                pass
         return self.chat_workdirs.get(chat_id, settings.runtime_work_dir)
 
     def set_chat_workdir(self, chat_id: int, workdir: str) -> None:
         resolved = str(Path(workdir).resolve())
+        old = self.chat_workdirs.get(chat_id)
+        if old and old != resolved:
+            hist = self.chat_workdir_history.get(chat_id, [])
+            hist.append(old)
+            # cap 20
+            if len(hist) > 20:
+                hist = hist[-20:]
+            self.chat_workdir_history[chat_id] = hist
         self.chat_workdirs[chat_id] = resolved
+        # Update global fallback to last successful workdir (single-user convenience)
+        # but keep per-chat isolation: global only affects chats without explicit mapping
         settings.runtime_work_dir = resolved
         self.save_state()
+        log.info(f"WORK_DIR chat={chat_id} -> {resolved}")
+
+    def pop_workdir_history(self, chat_id: int) -> Optional[str]:
+        """Pops last workdir from history (cd -). Returns None if empty."""
+        hist = self.chat_workdir_history.get(chat_id, [])
+        if not hist:
+            return None
+        prev = hist.pop()
+        self.chat_workdir_history[chat_id] = hist
+        self.save_state()
+        return prev
+
+    def peek_workdir_history(self, chat_id: int) -> Optional[str]:
+        hist = self.chat_workdir_history.get(chat_id, [])
+        return hist[-1] if hist else None
 
     async def fetch_sessions(self, work_dir: Optional[str] = None, limit: int = 30, query: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetches opencode sessions filtered by workdir and search query."""
